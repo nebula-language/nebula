@@ -135,6 +135,63 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	}
 
 	// =================================================================
+	// ALLOCA HOISTING
+	// =================================================================
+
+	/**
+	 * Emits an {@code alloca} instruction unconditionally into the <em>entry basic
+	 * block</em> of the current function, regardless of where the builder is
+	 * currently positioned.
+	 *
+	 * <h3>Why this matters</h3>
+	 * An {@code alloca} that lives in a non-entry basic block is a
+	 * <em>dynamic alloca</em>: the stack pointer is decremented every time that
+	 * block is executed. Inside a loop with N iterations this allocates N × size
+	 * bytes on the stack, causing stack overflow / memory corruption for large N.
+	 * LLVM's {@code mem2reg} pass also requires that promotable allocas reside in
+	 * the entry block.
+	 *
+	 * <h3>Mechanism</h3>
+	 * <ol>
+	 * <li>Save the current insertion block.</li>
+	 * <li>If the entry block already has a terminator (we are past the prologue),
+	 *     position the builder <em>before</em> that terminator so the alloca is
+	 *     appended to the alloca-region of the entry block.  Otherwise the builder
+	 *     is still building the entry block — just append normally.</li>
+	 * <li>Emit the {@code alloca}.</li>
+	 * <li>Restore the builder to the saved insertion block.</li>
+	 * </ol>
+	 *
+	 * @param type the LLVM type to allocate space for
+	 * @param name debug name for the alloca instruction
+	 * @return the {@link LLVMValueRef} of the emitted {@code alloca}
+	 */
+	private LLVMValueRef emitEntryAlloca(LLVMTypeRef type, String name)
+	{
+		LLVMBasicBlockRef currentBB = LLVMGetInsertBlock(builder);
+		LLVMBasicBlockRef entryBB   = LLVMGetEntryBasicBlock(currentFunction);
+
+		LLVMValueRef terminator = LLVMGetBasicBlockTerminator(entryBB);
+		if (terminator != null && !terminator.isNull())
+		{
+			// Entry block already has a br / ret — insert the alloca right before it.
+			LLVMPositionBuilderBefore(builder, terminator);
+		}
+		else
+		{
+			// Still building the entry block; append at its current end.
+			LLVMPositionBuilderAtEnd(builder, entryBB);
+		}
+
+		LLVMValueRef alloca = LLVMBuildAlloca(builder, type, name);
+
+		// Restore the original insertion point so the caller's stores / loads
+		// are emitted at the correct position (e.g. inside the loop body).
+		LLVMPositionBuilderAtEnd(builder, currentBB);
+		return alloca;
+	}
+
+	// =================================================================
 	// PUBLIC API
 	// =================================================================
 
@@ -154,7 +211,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			if (LLVMGetTypeKind(LLVMTypeOf(value)) != LLVMPointerTypeKind)
 			{
 				LLVMTypeRef structTy = LLVMTypeMapper.getOrCreateStructType(context, srcSt);
-				LLVMValueRef tmp = LLVMBuildAlloca(builder, structTy, "struct_arg_tmp");
+				LLVMValueRef tmp = emitEntryAlloca(structTy, "struct_arg_tmp");
 				LLVMBuildStore(builder, value, tmp);
 				return tmp;
 			}
@@ -466,15 +523,20 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		// 4. Add the function to the module (or retrieve if already declared)
 		String funcName = (currentSubstitution != null) ? getSpecializationName(symbol) : symbol.getMangledName();
 
-		// When emitting the entry-point `main` with a Nebula-declared void return,
-		// promote the LLVM return type to i32 so the OS-level ABI is satisfied.
-		// `start.c` passes %eax to sys_exit; without promotion it holds garbage.
-		boolean isVoidMain = "main".equals(funcName) && returnType == PrimitiveType.VOID;
+		// When emitting the entry-point `main`, always use the C ABI signature
+		// (i32 argc, ptr argv) -> i32, regardless of whether the Nebula source
+		// declared parameters or not.  This keeps binaries compatible with standard
+		// OS loaders and lets start.c pass argc/argv without any tricks.
+		boolean isMain = "main".equals(funcName);
+		boolean isVoidMain = isMain && returnType == PrimitiveType.VOID;
+		boolean mainHasArgs = isMain && !node.parameters.isEmpty();
 		LLVMTypeRef llvmFuncType;
-		if (isVoidMain)
+		if (isMain)
 		{
-			llvmFuncType = LLVMFunctionType(LLVMInt32TypeInContext(context),
-					new PointerPointer<LLVMTypeRef>(0L), 0, 0);
+			LLVMTypeRef i32t = LLVMInt32TypeInContext(context);
+			LLVMTypeRef ptrt = LLVMPointerTypeInContext(context, 0);
+			LLVMTypeRef[] mainParams = { i32t, ptrt };
+			llvmFuncType = LLVMFunctionType(i32t, new PointerPointer<>(mainParams), 2, 0);
 		}
 		else
 		{
@@ -523,39 +585,69 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		arrayElementCounts.clear();
 
 		// 6.5. Allocate and bind parameters to namedValues
-		int llvmParamIdx = 0;
-		// If this is a member method (represented by having 'this' in the FunctionType),
-		// bind the first LLVM parameter to "this".
-		if (funcType.parameterTypes.size() > node.parameters.size())
+		if (isMain)
 		{
-			LLVMValueRef thisValue = LLVMGetParam(function, llvmParamIdx++);
-			Type thisType = funcType.parameterTypes.get(0);
-			LLVMValueRef alloca = LLVMBuildAlloca(builder, toLLVMType(thisType), "this");
-			LLVMBuildStore(builder, thisValue, alloca);
-			namedValues.put("this", alloca);
-		}
-
-		for (int i = 0; i < node.parameters.size(); i++)
-		{
-			Parameter param = node.parameters.get(i);
-			LLVMValueRef paramValue = LLVMGetParam(function, llvmParamIdx++);
-
-			// Allocate space for the parameter
-			// The parameter type index accounts for 'this' if this is a member method
-			int paramTypeIdx = llvmParamIdx - 1;
-			if (paramTypeIdx >= funcType.parameterTypes.size())
+			// main's LLVM signature is always (i32 argc, ptr argv).
+			// When the Nebula source declares main(str[] args), build a Nebula str[]
+			// from argc/argv via the runtime helper and bind it to the parameter name.
+			// Also store argc as an i64 alloca under "__<name>_len" so that the
+			// iterator support (.len, foreach) can load a runtime-known count.
+			// When the source declares main() with no parameters, argc/argv are ignored.
+			LLVMValueRef argc = LLVMGetParam(function, 0);
+			LLVMValueRef argv = LLVMGetParam(function, 1);
+			if (mainHasArgs)
 			{
-				throw new CodegenException("Parameter index out of bounds for function: " + node.name);
+				LLVMValueRef argsPtr = emitBuildArgv(argc, argv);
+				Parameter argsParam = node.parameters.get(0);
+				// Data-pointer alloca
+				LLVMTypeRef ptrType = LLVMPointerTypeInContext(context, 0);
+				LLVMValueRef dataAlloca = LLVMBuildAlloca(builder, ptrType, argsParam.name());
+				LLVMBuildStore(builder, argsPtr, dataAlloca);
+				namedValues.put(argsParam.name(), dataAlloca);
+				// Companion length alloca: argc sign-extended to i64
+				LLVMTypeRef i64t = LLVMInt64TypeInContext(context);
+				LLVMValueRef lenVal = LLVMBuildSExt(builder, argc, i64t, "argc_i64");
+				LLVMValueRef lenAlloca = LLVMBuildAlloca(builder, i64t, "__" + argsParam.name() + "_len");
+				LLVMBuildStore(builder, lenVal, lenAlloca);
+				namedValues.put("__" + argsParam.name() + "_len", lenAlloca);
 			}
-			Type paramType = funcType.parameterTypes.get(paramTypeIdx);
-			LLVMValueRef alloca = LLVMBuildAlloca(builder, toLLVMType(paramType), param.name());
-			LLVMBuildStore(builder, paramValue, alloca);
-			namedValues.put(param.name(), alloca);
-
-			// CVT: If this parameter has 'drops', we own the region and must free it.
-			if (param.cvtModifier() == CVTModifier.DROPS && paramType instanceof ClassType ct)
+		}
+		else
+		{
+			int llvmParamIdx = 0;
+			// If this is a member method (represented by having 'this' in the FunctionType),
+			// bind the first LLVM parameter to "this".
+			if (funcType.parameterTypes.size() > node.parameters.size())
 			{
-				regionTracker.registerRegion(param.name(), alloca, ct.name());
+				LLVMValueRef thisValue = LLVMGetParam(function, llvmParamIdx++);
+				Type thisType = funcType.parameterTypes.get(0);
+				LLVMValueRef alloca = LLVMBuildAlloca(builder, toLLVMType(thisType), "this");
+				LLVMBuildStore(builder, thisValue, alloca);
+				namedValues.put("this", alloca);
+			}
+
+			for (int i = 0; i < node.parameters.size(); i++)
+			{
+				Parameter param = node.parameters.get(i);
+				LLVMValueRef paramValue = LLVMGetParam(function, llvmParamIdx++);
+
+				// Allocate space for the parameter
+				// The parameter type index accounts for 'this' if this is a member method
+				int paramTypeIdx = llvmParamIdx - 1;
+				if (paramTypeIdx >= funcType.parameterTypes.size())
+				{
+					throw new CodegenException("Parameter index out of bounds for function: " + node.name);
+				}
+				Type paramType = funcType.parameterTypes.get(paramTypeIdx);
+				LLVMValueRef alloca = LLVMBuildAlloca(builder, toLLVMType(paramType), param.name());
+				LLVMBuildStore(builder, paramValue, alloca);
+				namedValues.put(param.name(), alloca);
+
+				// CVT: If this parameter has 'drops', we own the region and must free it.
+				if (param.cvtModifier() == CVTModifier.DROPS && paramType instanceof ClassType ct)
+				{
+					regionTracker.registerRegion(param.name(), alloca, ct.name());
+				}
 			}
 		}
 
@@ -623,6 +715,36 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			method.accept(this);
 		}
 		return null;
+	}
+
+	/**
+	 * Emits a call to the runtime helper {@code __nebula_build_argv(i32 argc, ptr argv)}
+	 * which converts the C-level argc/argv into a heap-allocated array of Nebula
+	 * {@code str} structs ({@code { ptr data, i64 len }}).
+	 * Used by the compiler-generated main prologue when the Nebula entry point
+	 * is declared as {@code main(str[] args)}.
+	 *
+	 * @param argc the LLVM {@code i32} parameter value from the LLVM-level main
+	 * @param argv the LLVM {@code ptr} (char**) parameter value from the LLVM-level main
+	 * @return an LLVM {@code ptr} pointing to the first element of the built str[]
+	 */
+	private LLVMValueRef emitBuildArgv(LLVMValueRef argc, LLVMValueRef argv)
+	{
+		LLVMTypeRef i32t = LLVMInt32TypeInContext(context);
+		LLVMTypeRef ptrt = LLVMPointerTypeInContext(context, 0);
+		LLVMTypeRef[] paramTypes = { i32t, ptrt };
+		LLVMTypeRef fnType = LLVMFunctionType(ptrt, new PointerPointer<>(paramTypes), 2, 0);
+
+		String fnName = "__nebula_build_argv";
+		LLVMValueRef fn = LLVMGetNamedFunction(module, fnName);
+		if (fn == null || fn.isNull())
+		{
+			fn = LLVMAddFunction(module, fnName, fnType);
+			LLVMSetLinkage(fn, LLVMExternalLinkage);
+		}
+
+		LLVMValueRef[] args = { argc, argv };
+		return LLVMBuildCall2(builder, fnType, fn, new PointerPointer<>(args), 2, "args_ptr");
 	}
 
 	// =================================================================
@@ -913,7 +1035,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				// namedValues[varName] holds the alloca pointer (a ptr to the struct data),
 				// which is passed directly as 'self' in method calls — no load needed.
 				LLVMTypeRef structLlvmType = LLVMTypeMapper.getOrCreateStructType(context, structTy);
-				LLVMValueRef alloca = LLVMBuildAlloca(builder, structLlvmType, varName);
+				LLVMValueRef alloca = emitEntryAlloca(structLlvmType, varName);
 				if (decl.hasInitializer())
 				{
 					LLVMValueRef initVal = decl.initializer().accept(this);
@@ -936,7 +1058,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			else
 			{
 				// Primitives, class references, pointers: standard alloca-of-the-LLVM-type.
-				LLVMValueRef alloca = LLVMBuildAlloca(builder, toLLVMType(type), varName);
+				LLVMValueRef alloca = emitEntryAlloca(toLLVMType(type), varName);
 				if (decl.hasInitializer())
 				{
 					LLVMValueRef initVal = decl.initializer().accept(this);
@@ -1501,7 +1623,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		if (retType instanceof CompositeType retCt && srcType instanceof CompositeType)
 		{
 			LLVMTypeRef structType = LLVMTypeMapper.getOrCreateStructType(context, retCt);
-			LLVMValueRef alloca = LLVMBuildAlloca(builder, structType, "ret_struct");
+			LLVMValueRef alloca = emitEntryAlloca(structType, "ret_struct");
 			LLVMBuildStore(builder, value, alloca);
 			return alloca;
 		}
@@ -1515,7 +1637,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	private LLVMValueRef emitNoneOfType(OptionalType ot)
 	{
 		LLVMTypeRef optStructType = LLVMTypeMapper.getOrCreateOptionalStructType(context, ot);
-		LLVMValueRef optAlloca = LLVMBuildAlloca(builder, optStructType, "none");
+		LLVMValueRef optAlloca = emitEntryAlloca(optStructType, "none");
 
 		LLVMValueRef presentGep = LLVMBuildStructGEP2(builder, optStructType, optAlloca, 0, "none_present");
 		LLVMBuildStore(builder, LLVMConstInt(LLVMInt1TypeInContext(context), 0, 0), presentGep);
@@ -1533,7 +1655,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	private LLVMValueRef emitWrapInOptional(LLVMValueRef innerValue, Type innerSrcType, OptionalType targetOpt)
 	{
 		LLVMTypeRef optStructType = LLVMTypeMapper.getOrCreateOptionalStructType(context, targetOpt);
-		LLVMValueRef optAlloca = LLVMBuildAlloca(builder, optStructType, "opt_wrap");
+		LLVMValueRef optAlloca = emitEntryAlloca(optStructType, "opt_wrap");
 
 		LLVMValueRef presentGep = LLVMBuildStructGEP2(builder, optStructType, optAlloca, 0, "opt_present");
 		LLVMBuildStore(builder, LLVMConstInt(LLVMInt1TypeInContext(context), 1, 0), presentGep);
@@ -1753,6 +1875,17 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			elemLLVMType = toLLVMType(at.baseType);
 			lengthVal = LLVMConstInt(LLVMInt64TypeInContext(context), arrayElementCounts.get(ie.name), 0);
 		}
+		else if (iterableType instanceof ArrayType at
+				&& node.iterable instanceof IdentifierExpression ie
+				&& namedValues.containsKey("__" + ie.name + "_len"))
+		{
+			// Runtime-length array: length stored in companion alloca __<name>_len.
+			// iterableVal is already a pointer to the first element.
+			elemLLVMType = toLLVMType(at.baseType);
+			LLVMValueRef lenAlloca = namedValues.get("__" + ie.name + "_len");
+			lengthVal = LLVMBuildLoad2(builder, LLVMInt64TypeInContext(context), lenAlloca,
+					ie.name + "_foreach_len");
+		}
 		else
 		{
 			// For str: element is i8
@@ -1772,12 +1905,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		LLVMTypeRef i64t = LLVMInt64TypeInContext(context);
 
-		// index alloca
-		LLVMValueRef idxAlloca = LLVMBuildAlloca(builder, i64t, "foreach_idx");
+		// index alloca — hoisted to entry block to avoid dynamic stack growth
+		LLVMValueRef idxAlloca = emitEntryAlloca(i64t, "foreach_idx");
 		LLVMBuildStore(builder, LLVMConstInt(i64t, 0, 0), idxAlloca);
 
-		// element binding alloca
-		LLVMValueRef elemAlloca = LLVMBuildAlloca(builder, elemLLVMType, node.variableName);
+		// element binding alloca — hoisted to entry block
+		LLVMValueRef elemAlloca = emitEntryAlloca(elemLLVMType, node.variableName);
 
 		LLVMBasicBlockRef headerBB = LLVMAppendBasicBlockInContext(context, currentFunction, "foreach_hdr");
 		LLVMBasicBlockRef bodyBB   = LLVMAppendBasicBlockInContext(context, currentFunction, "foreach_body");
@@ -1973,6 +2106,33 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		};
 	}
 
+	/**
+	 * Emits a call to {@code __nebula_rt_str_eq(str a, str b) -> i32} and
+	 * converts the {@code i32} result to an {@code i1} boolean.
+	 * Both {@code str} arguments are passed by value as {@code { ptr, i64 }}
+	 * structs; the System V ABI splits each into two integer registers.
+	 *
+	 * @param lVal the LLVM {@code %str} value of the left-hand side
+	 * @param rVal the LLVM {@code %str} value of the right-hand side
+	 * @return an LLVM {@code i1} that is 1 when the strings are equal
+	 */
+	private LLVMValueRef emitStrEq(LLVMValueRef lVal, LLVMValueRef rVal)
+	{
+		LLVMTypeRef strT   = LLVMTypeMapper.getOrCreateStructType(context, PrimitiveType.STR);
+		LLVMTypeRef i32t   = LLVMInt32TypeInContext(context);
+		LLVMTypeRef fnType = LLVMFunctionType(i32t,
+			new PointerPointer<>(new LLVMTypeRef[]{ strT, strT }), 2, 0);
+		LLVMValueRef fn    = getOrDeclareIntrinsic("__nebula_rt_str_eq", fnType);
+
+		LLVMValueRef[] args   = { lVal, rVal };
+		LLVMValueRef   result = LLVMBuildCall2(builder, fnType, fn,
+			new PointerPointer<>(args), 2, "str_eq_i32");
+
+		// Convert i32 (1/0) → i1
+		return LLVMBuildICmp(builder, LLVMIntNE,
+			result, LLVMConstInt(i32t, 0, 0), "str_eq");
+	}
+
 	private LLVMValueRef emitBitwiseOp(LLVMValueRef lVal, LLVMValueRef rVal, BinaryOperator op, boolean isUnsigned)
 	{
 		return switch (op)
@@ -1997,6 +2157,20 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			&& (node.operator == BinaryOperator.EQ || node.operator == BinaryOperator.NE))
 		{
 			return emitOptionalNoneComparison(node, leftType, rightType);
+		}
+
+		// str == str / str != str: delegate to the runtime helper
+		if (leftType == PrimitiveType.STR && rightType == PrimitiveType.STR
+			&& (node.operator == BinaryOperator.EQ || node.operator == BinaryOperator.NE))
+		{
+			LLVMValueRef lVal = node.left.accept(this);
+			LLVMValueRef rVal = node.right.accept(this);
+			if (lVal == null || rVal == null)
+				return null;
+			LLVMValueRef eq = emitStrEq(lVal, rVal);
+			return node.operator == BinaryOperator.NE
+				? LLVMBuildNot(builder, eq, "str_ne")
+				: eq;
 		}
 
 		// Operator overloading for composite types (e.g. Vector3 + Vector3)
@@ -2058,7 +2232,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		OptionalType ot = (OptionalType) (leftIsOpt ? leftType : rightType);
 
 		LLVMTypeRef optStructType = LLVMTypeMapper.getOrCreateOptionalStructType(context, ot);
-		LLVMValueRef optAlloca = LLVMBuildAlloca(builder, optStructType, "opt_cmp_tmp");
+		LLVMValueRef optAlloca = emitEntryAlloca(optStructType, "opt_cmp_tmp");
 		LLVMBuildStore(builder, optVal, optAlloca);
 
 		LLVMValueRef presentGep = LLVMBuildStructGEP2(builder, optStructType, optAlloca, 0, "opt_present");
@@ -2101,7 +2275,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		else
 		{
 			LLVMTypeRef structTy = LLVMTypeMapper.getOrCreateStructType(context, (CompositeType) leftType);
-			selfPtr = LLVMBuildAlloca(builder, structTy, "op_lhs_tmp");
+			selfPtr = emitEntryAlloca(structTy, "op_lhs_tmp");
 			LLVMBuildStore(builder, lhsVal, selfPtr);
 		}
 
@@ -3078,6 +3252,25 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				LLVMValueRef tagGep = LLVMBuildStructGEP2(builder, unionStructType, unionAlloca, 0, "tag_gep");
 				LLVMBuildStore(builder, LLVMConstInt(i32t, uDisc, 0), tagGep);
 				return LLVMBuildLoad2(builder, unionStructType, unionAlloca, "union_val");
+			}
+		}
+
+		// ── Array .len — runtime-count companion alloca ──────────────────────
+		if (baseType instanceof ArrayType && node.memberName.equals("len")
+				&& node.target instanceof IdentifierExpression targetId)
+		{
+			String lenKey = "__" + targetId.name + "_len";
+			LLVMValueRef lenAlloca = namedValues.get(lenKey);
+			if (lenAlloca != null)
+			{
+				return LLVMBuildLoad2(builder, LLVMInt64TypeInContext(context), lenAlloca,
+						targetId.name + "_len");
+			}
+			// Compile-time known count (array literal)
+			Integer staticLen = arrayElementCounts.get(targetId.name);
+			if (staticLen != null)
+			{
+				return LLVMConstInt(LLVMInt64TypeInContext(context), staticLen, 0);
 			}
 		}
 

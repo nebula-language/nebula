@@ -417,11 +417,18 @@ return_type
     ;
 
 type
-    : (IDENTIFIER COLON)? (
-        class_type rank_specifier*
-        | predefined_type rank_specifier*
-        | tuple_type rank_specifier*
-    ) INTERR?
+    : (IDENTIFIER COLON)? base_type type_suffix*
+    ;
+
+type_suffix
+    : rank_specifier
+    | INTERR
+    ;
+
+base_type
+    : class_type
+    | predefined_type
+    | tuple_type
     ;
 
 tuple_type

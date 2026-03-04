@@ -487,6 +487,18 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitType(NebulaParser.TypeContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link NebulaParser#type_suffix}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitType_suffix(NebulaParser.Type_suffixContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#base_type}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitBase_type(NebulaParser.Base_typeContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link NebulaParser#tuple_type}.
 	 * @param ctx the parse tree
 	 * @return the visitor result

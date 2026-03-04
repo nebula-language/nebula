@@ -1239,16 +1239,17 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
 		TypeNode base = null;
 
-		if (ctx.predefined_type() != null)
+		var baseCtx = ctx.base_type();
+		if (baseCtx.predefined_type() != null)
 		{
-			base = new NamedType(span, ctx.predefined_type().getText(), Collections.emptyList());
+			base = new NamedType(span, baseCtx.predefined_type().getText(), Collections.emptyList());
 		}
-		else if (ctx.class_type() != null)
+		else if (baseCtx.class_type() != null)
 		{
-			String name = ctx.class_type().qualified_name().getText();
+			String name = baseCtx.class_type().qualified_name().getText();
 			// Parse generic type arguments if present: Pair<i32>, Map<str, i32>, etc.
 			List<TypeNode> typeArgs = Collections.emptyList();
-			var argList = ctx.class_type().type_argument_list();
+			var argList = baseCtx.class_type().type_argument_list();
 			if (argList != null && !argList.type().isEmpty())
 			{
 				typeArgs = new ArrayList<>();
@@ -1259,11 +1260,11 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			}
 			base = new NamedType(span, name, typeArgs);
 		}
-		else if (ctx.tuple_type() != null)
+		else if (baseCtx.tuple_type() != null)
 		{
 			List<TypeNode> elems = new ArrayList<>();
 			List<String> names = new ArrayList<>();
-			for (var elem : ctx.tuple_type().tuple_type_element())
+			for (var elem : baseCtx.tuple_type().tuple_type_element())
 			{
 				elems.add((TypeNode) visit(elem.type()));
 				names.add(elem.IDENTIFIER() != null ? elem.IDENTIFIER().getText() : null);
@@ -1271,19 +1272,21 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			base = new TupleType(span, elems, names);
 		}
 
-		if (!ctx.rank_specifier().isEmpty())
+		// Process type suffixes in declaration order.
+		// Each suffix is either [] (array) or ? (optional), allowing types like:
+		//   str?[]   → array of optional str   (ArrayType(OptionalType(str)))
+		//   str[]?   → optional array of str   (OptionalType(ArrayType(str)))
+		//   str?[]?  → optional array of optional str
+		for (var suffix : ctx.type_suffix())
 		{
-			// Handling array ranks
-			for (int i = 0; i < ctx.rank_specifier().size(); i++)
+			if (suffix.rank_specifier() != null)
 			{
 				base = new ArrayType(span, base, 1);
 			}
-		}
-
-		// Handle T? optional suffix
-		if (ctx.INTERR() != null)
-		{
-			base = new OptionalTypeNode(span, base);
+			else if (suffix.INTERR() != null)
+			{
+				base = new OptionalTypeNode(span, base);
+			}
 		}
 
 		return base;

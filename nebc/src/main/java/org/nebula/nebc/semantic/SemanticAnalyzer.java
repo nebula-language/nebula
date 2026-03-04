@@ -871,7 +871,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					error(DiagnosticCode.INVALID_MAIN_SIGNATURE, node);
 				}
-				if (!node.parameters.isEmpty())
+				if (!isValidMainParams(paramTypes))
 				{
 					error(DiagnosticCode.INVALID_MAIN_SIGNATURE, node);
 				}
@@ -879,6 +879,27 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				mainMethodReturnType = returnType;
 			}
 		}
+	}
+
+	/**
+	 * Returns true if the given resolved parameter type list is a valid signature
+	 * for the 'main' entry point.  The only valid forms are:
+	 * <ul>
+	 *   <li>{@code main()}         — no parameters</li>
+	 *   <li>{@code main(str[] args)} — exactly one {@code str[]} parameter</li>
+	 * </ul>
+	 */
+	private boolean isValidMainParams(List<Type> paramTypes)
+	{
+		if (paramTypes.isEmpty())
+			return true;
+		if (paramTypes.size() == 1
+			&& paramTypes.get(0) instanceof ArrayType at
+			&& at.baseType == PrimitiveType.STR)
+		{
+			return true;
+		}
+		return false;
 	}
 
 	@Override
@@ -1687,6 +1708,11 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		}
 		else if (objectType instanceof ArrayType)
 		{
+			if (node.memberName.equals("len"))
+			{
+				recordType(node, PrimitiveType.I64);
+				return PrimitiveType.I64;
+			}
 			// Arrays expose trait methods (e.g. toStr) via the synthetic Stringable scope
 			memberScope = getOrCreateStructuralStringableScope(objectType);
 		}

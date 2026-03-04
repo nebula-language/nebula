@@ -1,19 +1,21 @@
-extern int main();
+extern int main(int argc, void** argv);
 extern void sys_exit(int code);
 
 /*
  * _start is the ELF entry point — jumped to by the kernel, NOT called.
- * At entry, RSP is 16-byte aligned (per the System V x86-64 ABI).
- * We must NOT subtract anything before calling main(); the kernel-provided
- * RSP is already 16-byte aligned, so the CALL instruction will push the
- * return address, leaving RSP at 16n-8 inside main(), which satisfies the
- * ABI invariant "at function entry RSP ≡ 8 (mod 16)".
- * Using naked avoids any compiler-generated prolog that would misalign RSP.
+ * At entry, RSP points to argc (System V x86-64 ABI initial process stack).
+ * We pop argc into RDI and move the updated RSP (pointing at argv[0]) into
+ * RSI before calling main(argc, argv), satisfying the SysV calling convention.
+ * Passing argc/argv unconditionally is harmless — main bodies that declare no
+ * parameters simply ignore the incoming registers.
+ * Using naked avoids any compiler-generated prolog that would corrupt RSP.
  */
 __attribute__((naked)) void _start()
 {
     __asm__ volatile (
         "xor %rbp, %rbp\n\t"
+        "pop %rdi\n\t"
+        "mov %rsp, %rsi\n\t"
         "call main\n\t"
         "mov %eax, %edi\n\t"
         "call sys_exit\n\t"

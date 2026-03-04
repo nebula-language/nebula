@@ -236,3 +236,48 @@ NebulaStr __nebula_rt_format_array_str(const NebulaStr* elements, int64_t count)
 
     return (NebulaStr){ buf, total_len };
 }
+
+// ---------------------------------------------------------
+// Entry point: argc/argv -> Nebula str[]
+// ---------------------------------------------------------
+
+/**
+ * Converts a C argc/argv pair into a heap-allocated array of NebulaStr values.
+ * The array is tightly packed with exactly argc elements.  The companion length
+ * (argc) is passed back separately through the __nebula_build_argv_count global
+ * so the compiler-generated main prologue can populate a runtime-length alloca
+ * alongside the data pointer.
+ *
+ * Called by the compiler-generated main prologue when the Nebula entry point
+ * is declared as  main(str[] args).
+ */
+NebulaStr* __nebula_build_argv(int32_t argc, const uint8_t** argv)
+{
+    NebulaStr* result = (NebulaStr*)neb_alloc((uint64_t)argc * (uint64_t)sizeof(NebulaStr));
+    if (!result) return result;
+    for (int32_t i = 0; i < argc; i++)
+    {
+        const uint8_t* s = argv[i];
+        int64_t len = 0;
+        while (s[len] != '\0') { len++; }
+        result[i] = (NebulaStr){ s, len };
+    }
+    return result;
+}
+
+// ---------------------------------------------------------
+// str equality
+// ---------------------------------------------------------
+
+/**
+ * Returns 1 if the two Nebula strings contain identical bytes, 0 otherwise.
+ * Both strings are passed by value (two-register SysV ABI: { ptr, i64 }).
+ * Used by the compiler when it lowers  str == str  and  str != str.
+ */
+int32_t __nebula_rt_str_eq(NebulaStr a, NebulaStr b)
+{
+    if (a.len != b.len) return 0;
+    for (int64_t i = 0; i < a.len; i++)
+        if (a.ptr[i] != b.ptr[i]) return 0;
+    return 1;
+}

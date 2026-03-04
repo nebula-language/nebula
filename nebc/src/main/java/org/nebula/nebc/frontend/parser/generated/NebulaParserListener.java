@@ -800,6 +800,26 @@ public interface NebulaParserListener extends ParseTreeListener {
 	 */
 	void exitType(NebulaParser.TypeContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link NebulaParser#type_suffix}.
+	 * @param ctx the parse tree
+	 */
+	void enterType_suffix(NebulaParser.Type_suffixContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link NebulaParser#type_suffix}.
+	 * @param ctx the parse tree
+	 */
+	void exitType_suffix(NebulaParser.Type_suffixContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link NebulaParser#base_type}.
+	 * @param ctx the parse tree
+	 */
+	void enterBase_type(NebulaParser.Base_typeContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link NebulaParser#base_type}.
+	 * @param ctx the parse tree
+	 */
+	void exitBase_type(NebulaParser.Base_typeContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link NebulaParser#tuple_type}.
 	 * @param ctx the parse tree
 	 */
