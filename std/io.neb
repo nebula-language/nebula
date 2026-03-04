@@ -2,17 +2,21 @@ namespace std::io;
 use std::traits;
 use std::primitives;
 
+trait Stringable {
+    str toStr();
+}
+
 extern "C" {
     void __nebula_rt_print(keeps Ref<u8> buf);
     void __nebula_rt_println(keeps Ref<u8> buf);
 }
 
-// Generic print that works for anything displayable
-void print<T: Displayable>(T item) {
+// Generic print that works for anything Stringable
+void print<T: Stringable>(T item) {
     __nebula_rt_print(item.toStr().ptr);
 }
 
-// Generic println that works for anything displayable
-void println<T: Displayable>(T item) {
+// Generic println that works for anything Stringable
+void println<T: Stringable>(T item) {
     __nebula_rt_println(item.toStr().ptr);
 }

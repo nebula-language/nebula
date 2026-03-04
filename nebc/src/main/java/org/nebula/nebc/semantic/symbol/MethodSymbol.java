@@ -17,6 +17,8 @@ public final class MethodSymbol extends Symbol
 	private final boolean isExtern;
 	private final List<TypeParameterType> typeParameters;
 	private String traitName = null;
+	/** LLVM bitcode for the type-erased version of this generic method (null for non-generics). */
+	private byte[] genericBitcode = null;
 
 	public MethodSymbol(String name, FunctionType type, List<Modifier> modifiers, boolean isExtern, ASTNode declarationNode, List<TypeParameterType> typeParameters)
 	{
@@ -34,6 +36,16 @@ public final class MethodSymbol extends Symbol
 	public void setTraitName(String traitName)
 	{
 		this.traitName = traitName;
+	}
+
+	public byte[] getGenericBitcode()
+	{
+		return genericBitcode;
+	}
+
+	public void setGenericBitcode(byte[] bitcode)
+	{
+		this.genericBitcode = bitcode;
 	}
 
 	@Override

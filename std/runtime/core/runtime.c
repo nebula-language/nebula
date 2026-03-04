@@ -2,6 +2,7 @@
 
 // Forward declarations from platform-specific syscalls
 extern long sys_write(int fd, const void* buf, long count);
+extern void* neb_alloc(uint64_t size);
 
 // Utility function to get length of null-terminated string
 static int32_t __nebula_strlen(const uint8_t* str)
@@ -35,7 +36,7 @@ void __nebula_rt_println(const uint8_t* buf)
 }
 
 // ---------------------------------------------------------
-// Primitive toString helpers (used by Displayable trait)
+// Primitive toString helpers (used by Stringable trait)
 // ---------------------------------------------------------
 
 typedef struct {
@@ -61,65 +62,63 @@ static void reverse_str(char* str, int len) {
 }
 
 NebulaStr __nebula_rt_i64_to_str(int64_t v) {
-    static THREAD_LOCAL char buf[32];
+    char tmp[32];
     int i = 0;
     int is_neg = 0;
     
     if (v == 0) {
-        buf[i++] = '0';
-        buf[i] = '\0';
-        return (NebulaStr){ (const uint8_t*)buf, 1 };
+        tmp[i++] = '0';
+        tmp[i] = '\0';
+    } else {
+        if (v < 0) {
+            is_neg = 1;
+            v = -v;
+        }
+        while (v != 0) {
+            tmp[i++] = (v % 10) + '0';
+            v = v / 10;
+        }
+        if (is_neg) {
+            tmp[i++] = '-';
+        }
+        tmp[i] = '\0';
+        reverse_str(tmp, i);
     }
-    
-    if (v < 0) {
-        is_neg = 1;
-        v = -v;
-    }
-    
-    while (v != 0) {
-        buf[i++] = (v % 10) + '0';
-        v = v / 10;
-    }
-    
-    if (is_neg) {
-        buf[i++] = '-';
-    }
-    
-    buf[i] = '\0';
-    reverse_str(buf, i);
-    
-    return (NebulaStr){ (const uint8_t*)buf, i };
+    uint8_t* buf = (uint8_t*)neb_alloc((uint64_t)(i + 1));
+    if (!buf) return (NebulaStr){ (const uint8_t*)"", 0 };
+    for (int k = 0; k <= i; k++) buf[k] = (uint8_t)tmp[k];
+    return (NebulaStr){ buf, i };
 }
 
 NebulaStr __nebula_rt_u64_to_str(uint64_t v) {
-    static THREAD_LOCAL char buf[32];
+    char tmp[32];
     int i = 0;
     
     if (v == 0) {
-        buf[i++] = '0';
-        buf[i] = '\0';
-        return (NebulaStr){ (const uint8_t*)buf, 1 };
+        tmp[i++] = '0';
+        tmp[i] = '\0';
+    } else {
+        while (v != 0) {
+            tmp[i++] = (v % 10) + '0';
+            v = v / 10;
+        }
+        tmp[i] = '\0';
+        reverse_str(tmp, i);
     }
-    
-    while (v != 0) {
-        buf[i++] = (v % 10) + '0';
-        v = v / 10;
-    }
-    
-    buf[i] = '\0';
-    reverse_str(buf, i);
-    
-    return (NebulaStr){ (const uint8_t*)buf, i };
+    uint8_t* buf = (uint8_t*)neb_alloc((uint64_t)(i + 1));
+    if (!buf) return (NebulaStr){ (const uint8_t*)"", 0 };
+    for (int k = 0; k <= i; k++) buf[k] = (uint8_t)tmp[k];
+    return (NebulaStr){ buf, i };
 }
 
 // Float is harder without libc, so we do a very basic approximation 
 // for display purposes: integer part + 6 decimal places.
 NebulaStr __nebula_rt_f64_to_str(double v) {
-    static THREAD_LOCAL char buf[64];
+    char tmp[64];
     int i = 0;
     
     if (v < 0) {
-        buf[i++] = '-';
+        tmp[i++] = '-';
         v = -v;
     }
     
@@ -140,22 +139,25 @@ NebulaStr __nebula_rt_f64_to_str(double v) {
     
     // Reverse int part and copy to main buf
     for (int j = int_len - 1; j >= 0; j--) {
-        buf[i++] = int_buf[j];
+        tmp[i++] = int_buf[j];
     }
     
     // Decimal point
-    buf[i++] = '.';
+    tmp[i++] = '.';
     
     // 6 decimal places
     for (int d = 0; d < 6; d++) {
         frac_part *= 10;
         int digit = (int)frac_part;
-        buf[i++] = digit + '0';
+        tmp[i++] = digit + '0';
         frac_part -= digit;
     }
     
-    buf[i] = '\0';
-    return (NebulaStr){ (const uint8_t*)buf, i };
+    tmp[i] = '\0';
+    uint8_t* buf = (uint8_t*)neb_alloc((uint64_t)(i + 1));
+    if (!buf) return (NebulaStr){ (const uint8_t*)"", 0 };
+    for (int k = 0; k <= i; k++) buf[k] = (uint8_t)tmp[k];
+    return (NebulaStr){ buf, i };
 }
 
 NebulaStr __nebula_rt_bool_to_str(int32_t v) {
@@ -164,4 +166,36 @@ NebulaStr __nebula_rt_bool_to_str(int32_t v) {
     } else {
         return (NebulaStr){ (const uint8_t*)"false", 5 };
     }
+}
+
+// ---------------------------------------------------------
+// String interpolation helper (used by $"..." expressions)
+// ---------------------------------------------------------
+
+// Concatenate N NebulaStr values into a single heap-allocated buffer.
+NebulaStr __nebula_rt_str_concat(NebulaStr* parts, int64_t count)
+{
+    int64_t total_len = 0;
+    for (int64_t i = 0; i < count; i++)
+    {
+        total_len += parts[i].len;
+    }
+
+    uint8_t* buf = (uint8_t*)neb_alloc((uint64_t)(total_len + 1));
+    if (!buf)
+    {
+        return (NebulaStr){ (const uint8_t*)"", 0 };
+    }
+
+    int64_t offset = 0;
+    for (int64_t i = 0; i < count; i++)
+    {
+        for (int64_t j = 0; j < parts[i].len; j++)
+        {
+            buf[offset++] = parts[i].ptr[j];
+        }
+    }
+    buf[total_len] = '\0';
+
+    return (NebulaStr){ buf, total_len };
 }

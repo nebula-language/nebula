@@ -59,7 +59,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	public static CompilationUnit buildAst(ParsingResult tree)
 	{
 		ASTBuilder builder = new ASTBuilder();
-		currentFileName = tree.file().fileName();
+		currentFileName = tree.file().path();
 		return (CompilationUnit) builder.visit(tree.compilationUnitRoot());
 	}
 

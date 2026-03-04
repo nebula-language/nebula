@@ -2,6 +2,8 @@ package org.nebula.nebc.frontend.parser;
 
 import org.antlr.v4.runtime.*;
 import org.antlr.v4.runtime.tree.ParseTree;
+import org.nebula.nebc.ast.ASTBuilder;
+import org.nebula.nebc.ast.CompilationUnit;
 import org.nebula.nebc.core.CompilerConfig;
 import org.nebula.nebc.frontend.parser.generated.NebulaLexer;
 import org.nebula.nebc.frontend.parser.generated.NebulaParser;
@@ -10,6 +12,7 @@ import org.nebula.nebc.util.Log;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -190,6 +193,42 @@ public class Parser
 		}
 
 		return totalErrors;
+	}
+
+	/**
+	 * Parses a Nebula source string directly (without reading from disk).
+	 * Returns the resulting {@link CompilationUnit} list, or an empty list if parsing fails.
+	 *
+	 * <p>Intended for reconstructing AST nodes from embedded library source stored in
+	 * {@code .nebsym} files, where source files may not be present on the consumer's system.</p>
+	 *
+	 * @param source          The complete Nebula source text to parse.
+	 * @param virtualFileName A descriptive label used for error messages and source spans
+	 *                        (e.g. {@code "<nebsym:std::io/println>"}).
+	 * @return Parsed {@link CompilationUnit} list (empty on failure).
+	 */
+	public static List<CompilationUnit> parseString(String source, String virtualFileName)
+	{
+		try
+		{
+			CharStream input        = CharStreams.fromString(source);
+			NebulaLexer lexer       = new NebulaLexer(input);
+			lexer.removeErrorListeners();
+			CommonTokenStream tokens = new CommonTokenStream(lexer);
+			tokens.fill();
+
+			NebulaParser parser = new NebulaParser(tokens);
+			parser.removeErrorListeners();
+
+			ParseTree tree = parser.compilation_unit();
+			SourceFile sf  = new SourceFile(virtualFileName);
+			return ASTBuilder.buildAST(List.of(new ParsingResult(sf, tree)));
+		}
+		catch (Exception e)
+		{
+			Log.warn("Failed to parse embedded body source (" + virtualFileName + "): " + e.getMessage());
+			return Collections.emptyList();
+		}
 	}
 
 	/**

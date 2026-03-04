@@ -9,23 +9,55 @@ import org.nebula.nebc.semantic.types.*;
 
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.Base64;
 import java.util.Map;
 
 public class SymbolExporter
 {
     private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
 
-    public void export(SymbolTable table, String projectName, String outputPath) throws IOException
+    // ── Public API ──────────────────────────────────────────────────────────────
+
+    /**
+     * Exports global-scope symbols and primitive-trait-impl scopes into a
+     * {@code .nebsym} JSON file.
+     *
+     * <p>The {@code primitiveImplScopes} map is optional (may be null or empty).
+     * Generic methods whose erased LLVM bitcode has been pre-computed (by the
+     * compilation pipeline via
+     * {@link org.nebula.nebc.codegen.LLVMCodeGenerator#emitErasedFunctionBitcode})
+     * are stored with an {@code "erased_bitcode"} field containing the bitcode
+     * bytes encoded as Base64.  Consumers link this bitcode at compile-time and
+     * let LLVM's inliner eliminate all vtable indirection — zero runtime cost.</p>
+     */
+    public void export(
+            SymbolTable table,
+            Map<Type, SymbolTable> primitiveImplScopes,
+            String projectName,
+            String outputPath) throws IOException
     {
         JsonObject root = new JsonObject();
         root.addProperty("name", projectName);
         root.add("symbols", exportTable(table));
+
+        if (primitiveImplScopes != null && !primitiveImplScopes.isEmpty())
+        {
+            root.add("primitive_impls", exportPrimitiveImpls(primitiveImplScopes));
+        }
 
         try (FileWriter writer = new FileWriter(outputPath))
         {
             gson.toJson(root, writer);
         }
     }
+
+    /** Backwards-compatible overload without primitive-impl scopes. */
+    public void export(SymbolTable table, String projectName, String outputPath) throws IOException
+    {
+        export(table, null, projectName, outputPath);
+    }
+
+    // ── Symbol table export ─────────────────────────────────────────────────────
 
     private JsonArray exportTable(SymbolTable table)
     {
@@ -72,6 +104,11 @@ public class SymbolExporter
         obj.addProperty("name", ms.getName());
         obj.addProperty("is_extern", ms.isExtern());
 
+        if (ms.getTraitName() != null)
+        {
+            obj.addProperty("trait_name", ms.getTraitName());
+        }
+
         FunctionType type = ms.getType();
         obj.addProperty("return_type", type.getReturnType().name());
 
@@ -81,7 +118,6 @@ public class SymbolExporter
             Type pType = type.getParameterTypes().get(i);
             JsonObject pObj = new JsonObject();
 
-            // Try to get parameter name and hint if available
             if (type.getParameterInfos() != null && i < type.getParameterInfos().size())
             {
                 ParameterInfo info = type.getParameterInfos().get(i);
@@ -123,6 +159,14 @@ public class SymbolExporter
                 tps.add(tpObj);
             }
             obj.add("type_parameters", tps);
+
+            // Embed pre-compiled erased bitcode so consumers can compile generics
+            // without the original source (zero-cost via LLVM link + inline).
+            byte[] bitcode = ms.getGenericBitcode();
+            if (bitcode != null && bitcode.length > 0)
+            {
+                obj.addProperty("erased_bitcode", Base64.getEncoder().encodeToString(bitcode));
+            }
         }
 
         return obj;
@@ -155,7 +199,6 @@ public class SymbolExporter
         else if (type instanceof UnionType)
         {
             obj.addProperty("kind", "union");
-            // TODO: variants with payloads
         }
         else if (type instanceof TraitType tt)
         {
@@ -175,4 +218,32 @@ public class SymbolExporter
         obj.addProperty("mutable", vs.isMutable());
         return obj;
     }
+
+    // ── Primitive impl export ────────────────────────────────────────────────────
+
+    private JsonArray exportPrimitiveImpls(Map<Type, SymbolTable> primitiveImplScopes)
+    {
+        JsonArray array = new JsonArray();
+        for (Map.Entry<Type, SymbolTable> entry : primitiveImplScopes.entrySet())
+        {
+            Type primType       = entry.getKey();
+            SymbolTable scope   = entry.getValue();
+
+            JsonObject obj = new JsonObject();
+            obj.addProperty("type", primType.name());
+
+            JsonArray methods = new JsonArray();
+            for (Symbol sym : scope.getSymbols().values())
+            {
+                if (sym instanceof MethodSymbol ms)
+                {
+                    methods.add(exportMethod(ms));
+                }
+            }
+            obj.add("methods", methods);
+            array.add(obj);
+        }
+        return array;
+    }
+
 }

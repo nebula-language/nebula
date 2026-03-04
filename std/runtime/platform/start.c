@@ -1,9 +1,6 @@
 extern int main();
 extern void sys_exit(int code);
 
-extern int main();
-extern void sys_exit(int code);
-
 /*
  * _start is the ELF entry point — jumped to by the kernel, NOT called.
  * At entry, RSP is 16-byte aligned (per the System V x86-64 ABI).

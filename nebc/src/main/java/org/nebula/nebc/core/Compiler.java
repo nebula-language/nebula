@@ -1,21 +1,21 @@
 package org.nebula.nebc.core;
 
 import org.nebula.nebc.ast.ASTBuilder;
-import org.nebula.nebc.ast.ASTNode;
 import org.nebula.nebc.ast.CompilationUnit;
-import org.nebula.nebc.ast.statements.UseStatement;
 import org.nebula.nebc.codegen.CodegenException;
 import org.nebula.nebc.codegen.LLVMCodeGenerator;
 import org.nebula.nebc.codegen.NativeCompiler;
 import org.nebula.nebc.frontend.diagnostic.Diagnostic;
 import org.nebula.nebc.frontend.parser.Parser;
-import org.nebula.nebc.frontend.parser.ParsingResult;
 import org.nebula.nebc.io.SourceFile;
 import org.nebula.nebc.semantic.SemanticAnalyzer;
 import org.nebula.nebc.semantic.SymbolExporter;
 import org.nebula.nebc.semantic.SymbolImporter;
+import org.nebula.nebc.semantic.SymbolTable;
+import org.nebula.nebc.semantic.symbol.MethodSymbol;
 import org.nebula.nebc.semantic.symbol.NamespaceSymbol;
 import org.nebula.nebc.semantic.symbol.Symbol;
+import org.nebula.nebc.semantic.types.Type;
 import org.nebula.nebc.util.Log;
 import org.nebula.util.ExitCode;
 
@@ -29,6 +29,12 @@ public class Compiler
 {
 	private final CompilerConfig config;
 	private List<CompilationUnit> compilationUnits;
+
+	/** Library search directories auto-detected alongside loaded .nebsym files. */
+	private final List<java.io.File> autoLibraryDirs = new ArrayList<>();
+
+	/** Library names (e.g. "neb") auto-detected alongside loaded .nebsym files. */
+	private final List<SourceFile> autoLibNames = new ArrayList<>();
 
 	public Compiler(CompilerConfig config)
 	{
@@ -50,13 +56,9 @@ public class Compiler
 		// 3. Semantic Analysis (Type checking, symbol resolution)
 		SemanticAnalyzer analyzer = new SemanticAnalyzer(config);
 
-		// 3.1 Load external symbols
+		// 3.1 Load external symbols (.nebsym files) into the symbol table.
 		loadExternalSymbols(analyzer);
 
-		// 3.2 Resolve Standard Library Dependencies recursively (on-demand loading of .neb files).
-		// Prelude source namespaces are also seeded here so that generic prelude functions
-		// (e.g. println<T>) have real AST declaration nodes available for monomorphization.
-		resolveDependencies(analyzer);
 		for (var cu : compilationUnits)
 		{
 			Log.debug(cu.toString());
@@ -91,9 +93,8 @@ public class Compiler
 		}
 
 		// 3.1.5 Export prelude symbols (make commonly-used std symbols globally available).
-		// Must run AFTER declareMethods so that source-loaded symbols have their declaration
-		// nodes populated (via forceDefine), ensuring generic prelude functions are
-		// monomorphizable during code generation.
+		// Runs after declareMethods so that source-loaded symbols from synthetic CUs have
+		// their declaration nodes populated (enabling monomorphization).
 		exportPreludeSymbols(analyzer);
 
 		// Phase 1.75: Process all trait bodies so their member scopes are populated
@@ -141,7 +142,12 @@ public class Compiler
 			List<CompilationUnit> unitsToCompile = compilationUnits;
 			if (!config.compileAsLibrary())
 			{
-				unitsToCompile = compilationUnits.stream().filter(cu -> !cu.getSpan().file().startsWith("std/") && !cu.getSpan().file().contains("/std/") && !cu.getSpan().file().contains("\\std\\")).toList();
+				// Exclude units originating from the standard library directory.
+				unitsToCompile = compilationUnits.stream()
+					.filter(cu -> !cu.getSpan().file().startsWith("std/")
+						&& !cu.getSpan().file().contains("/std/")
+						&& !cu.getSpan().file().contains("\\std\\"))
+					.toList();
 			}
 			codegen.generate(unitsToCompile, analyzer);
 
@@ -168,6 +174,15 @@ public class Compiler
 			// 6. Verify the module only after dumping it
 			codegen.verifyModule();
 
+			// 6a. For library builds: generate erased LLVM bitcode for all generic
+			// methods so consumers can compile without the original source files.
+			// Must run before NativeCompiler (module still valid) and before
+			// exportSymbols (SymbolExporter reads the bitcode bytes from each MethodSymbol).
+			if (config.compileAsLibrary())
+			{
+				generateErasedBitcodes(codegen, analyzer);
+			}
+
 			// 6. Emit native binary
 			String outputPath = config.outputFile() != null ? config.outputFile() : "a.out";
 			List<Path> extraObjects = new ArrayList<>();
@@ -179,7 +194,13 @@ public class Compiler
 				extraObjects.addAll(nativeObjects);
 			}
 
-			NativeCompiler.compile(codegen.getModule(), outputPath, config.targetPlatform(), config.isStatic(), config.compileAsLibrary(), extraObjects, config.librarySearchPaths(), config.nebLibraries());
+			// Merge auto-detected library dirs and names with config-provided ones.
+			List<java.io.File> allLibDirs = new ArrayList<>(config.librarySearchPaths());
+			allLibDirs.addAll(autoLibraryDirs);
+			List<SourceFile> allLibNames = new ArrayList<>(config.nebLibraries());
+			allLibNames.addAll(autoLibNames);
+
+			NativeCompiler.compile(codegen.getModule(), outputPath, config.targetPlatform(), config.isStatic(), config.compileAsLibrary(), extraObjects, allLibDirs, allLibNames);
 
 			// Cleanup extra objects
 			for (Path p : extraObjects)
@@ -300,7 +321,8 @@ public class Compiler
 
 	private void loadExternalSymbols(SemanticAnalyzer analyzer)
 	{
-		SymbolImporter importer = new SymbolImporter();
+		SymbolImporter importer  = new SymbolImporter();
+		java.util.Map<Type, SymbolTable> primImpls = analyzer.getPrimitiveImplScopes();
 
 		// Load default std if not disabled
 		if (config.useStdLib())
@@ -310,17 +332,40 @@ public class Compiler
 				Path stdSyms = Path.of("neb.nebsym");
 				if (!Files.exists(stdSyms))
 				{
-					stdSyms = Path.of("..", "neb.nebsym"); // Try parent for dev environment
+					stdSyms = Path.of("..", "neb.nebsym");
 				}
 
 				if (Files.exists(stdSyms))
 				{
 					Log.info("Loading standard library symbols: " + stdSyms);
-					importer.importSymbols(stdSyms.toString(), analyzer.getGlobalScope());
+					importer.importSymbols(stdSyms.toString(), analyzer.getGlobalScope(), primImpls);
+
+					// Auto-detect the compiled std library (.so or .a) next to the .nebsym
+					// file so consumers of erased bitcode can resolve concrete symbols like
+					// str__Stringable__toStr at link time without explicit -l flags.
+					if (!config.compileAsLibrary())
+					{
+						Path symDir = stdSyms.toAbsolutePath().getParent();
+						if (symDir == null)
+							symDir = Path.of("").toAbsolutePath();
+						for (String libName : List.of("libneb.so", "libneb.a"))
+						{
+							Path candidate = symDir.resolve(libName);
+							if (Files.exists(candidate))
+							{
+								// Strip "lib" prefix and ".so"/".a" suffix for -l flag
+								String baseName = libName.substring(3, libName.lastIndexOf('.'));
+								autoLibraryDirs.add(symDir.toFile());
+								autoLibNames.add(new SourceFile(baseName));
+								Log.info("Auto-linking std library: " + candidate);
+								break;
+							}
+						}
+					}
 				}
 				else
 				{
-					Log.warn("Standard library symbols (neb.nebsym) not found. On-demand source loading will be used.");
+					Log.warn("Standard library symbols (neb.nebsym) not found.");
 				}
 			}
 			catch (IOException e)
@@ -335,7 +380,7 @@ public class Compiler
 			try
 			{
 				Log.info("Loading symbols: " + sf.path());
-				importer.importSymbols(sf.path(), analyzer.getGlobalScope());
+				importer.importSymbols(sf.path(), analyzer.getGlobalScope(), primImpls);
 			}
 			catch (IOException e)
 			{
@@ -344,39 +389,67 @@ public class Compiler
 		}
 	}
 
-	private void exportPreludeSymbols(SemanticAnalyzer analyzer)
+	/**
+	 * Walks the global symbol table (and all namespace sub-tables) to find every
+	 * generic {@link MethodSymbol} that was compiled in this run (i.e. has a non-null
+	 * {@link MethodDeclaration} node), and asks the code generator to produce the
+	 * type-erased LLVM bitcode for it.  The bytes are stored on the symbol so that
+	 * {@link SymbolExporter} can embed them as Base64 in the {@code .nebsym} file.
+	 */
+	private void generateErasedBitcodes(LLVMCodeGenerator codegen, SemanticAnalyzer analyzer)
 	{
-		System.out.println("DEBUG: Exporting prelude symbols...");
+		generateErasedBitcodesInScope(codegen, analyzer.getGlobalScope());
+	}
+
+	private void generateErasedBitcodesInScope(LLVMCodeGenerator codegen, SymbolTable scope)
+	{
+		for (Symbol sym : scope.getSymbols().values())
+		{
+			if (sym instanceof MethodSymbol ms
+					&& !ms.getTypeParameters().isEmpty()
+					&& ms.getDeclarationNode() instanceof org.nebula.nebc.ast.declarations.MethodDeclaration decl)
+			{
+				Log.debug("Generating erased bitcode for generic method: " + ms.getName());
+				byte[] bitcode = codegen.emitErasedFunctionBitcode(decl, ms);
+				if (bitcode != null)
+					ms.setGenericBitcode(bitcode);
+				else
+					Log.warn("Could not generate erased bitcode for: " + ms.getName());
+			}
+			else if (sym instanceof NamespaceSymbol ns)
+			{
+				generateErasedBitcodesInScope(codegen, ns.getMemberTable());
+			}
+		}
+	}
+
+	private void exportPreludeSymbols(SemanticAnalyzer analyzer)	{
 		// Export prelude symbols: make commonly-used std::io symbols available globally
-		// without requiring explicit 'use' statements
+		// without requiring explicit 'use' statements.
 		if (!config.useStdLib())
 			return;
 
-		// Resolve std::io namespace
 		Symbol stdIoSymbol = analyzer.getGlobalScope().resolve("std");
 		if (stdIoSymbol == null || !(stdIoSymbol instanceof NamespaceSymbol stdNs))
 		{
-			Log.debug("Couldnt resolve the std namespace");
+			Log.debug("Couldn't resolve the std namespace");
 			return;
 		}
 
 		Symbol ioSymbol = stdNs.getMemberTable().resolve("io");
 		if (ioSymbol == null || !(ioSymbol instanceof NamespaceSymbol ioNs))
 		{
-			Log.debug("Couldnt resolve the std::io namespace");
+			Log.debug("Couldn't resolve the std::io namespace");
 			return;
 		}
 
-		// Export commonly-used I/O functions to the global scope
-		// This creates aliases in the global scope that point to std::io symbols
-		String[] preludeSymbols = { "print", "println" };
+		String[] preludeSymbols = { "print", "println", "Stringable" };
 
 		for (String symbolName : preludeSymbols)
 		{
 			Symbol symbol = ioNs.getMemberTable().resolve(symbolName);
 			if (symbol != null)
 			{
-				// Define the symbol in the global scope (as an alias/import)
 				analyzer.getGlobalScope().define(symbol);
 				if (config.verbose())
 				{
@@ -400,7 +473,9 @@ public class Compiler
 		try
 		{
 			Log.info("Exporting symbols to: " + symPath);
-			exporter.export(analyzer.getGlobalScope(), outputPath, symPath);
+			exporter.export(analyzer.getGlobalScope(),
+					analyzer.getPrimitiveImplScopes(),
+					outputPath, symPath);
 		}
 		catch (IOException e)
 		{
@@ -408,99 +483,4 @@ public class Compiler
 		}
 	}
 
-	private void resolveDependencies(SemanticAnalyzer analyzer)
-	{
-		if (config.compileAsLibrary())
-			return;
-
-		java.util.Set<String> loadedFiles = new java.util.HashSet<>();
-		java.util.List<String> toLoad = new ArrayList<>();
-
-		// Always load prelude source namespaces so that generic prelude functions
-		// (e.g. println<T: Displayable>) have real AST declaration nodes available
-		// for monomorphization, even when the user writes no explicit 'use' statement.
-		if (config.useStdLib())
-		{
-			toLoad.add("std::io");
-		}
-
-		// Also check user code for explicit 'use std::...'
-		for (CompilationUnit cu : compilationUnits)
-		{
-			for (ASTNode directive : cu.directives)
-			{
-				if (directive instanceof UseStatement use && use.qualifiedName.startsWith("std::"))
-				{
-					// Only load from source if it wasn't already loaded as an external symbol (library)
-					// We check if the EXACT namespace exists.
-					   Symbol existingNs = analyzer.getGlobalScope().resolve(use.qualifiedName);
-					   if (existingNs == null || existingNs.getDeclarationNode() == null)
-					   {
-						   toLoad.add(use.qualifiedName);
-					   }
-				}
-			}
-		}
-
-		while (!toLoad.isEmpty())
-		{
-			String dep = toLoad.remove(0);
-			if (loadedFiles.contains(dep))
-				continue;
-			loadedFiles.add(dep);
-
-			// Map std::foo::bar to std/foo/bar.neb or std/foo.neb
-			Path path = resolveStdPath(dep);
-			if (path != null && Files.exists(path))
-			{
-				Log.info("Loading dependency: " + dep + " (" + path + ")");
-				SourceFile sf = new SourceFile(path.toString());
-				Parser p = new Parser(config, List.of(sf));
-				if (p.parse() == 0)
-				{
-					// Filter p.getParsingResultList() to only include sf
-					List<ParsingResult> results = p.getParsingResultList().stream().filter(r -> Path.of(r.file().path()).toAbsolutePath().toString().equals(Path.of(sf.path()).toAbsolutePath().toString())).toList();
-
-					List<CompilationUnit> cus = ASTBuilder.buildAST(results);
-					for (CompilationUnit cu : cus)
-					{
-						this.compilationUnits.add(0, cu); // Prepend std units
-						// Check this new unit for more dependencies
-						for (ASTNode directive : cu.directives)
-						{
-							if (directive instanceof UseStatement use && use.qualifiedName.startsWith("std::"))
-							{
-								   Symbol existingNs = analyzer.getGlobalScope().resolve(use.qualifiedName);
-								   if (existingNs == null || existingNs.getDeclarationNode() == null)
-								   {
-									   toLoad.add(use.qualifiedName);
-								   }
-							}
-						}
-					}
-				}
-			}
-			else
-			{
-				Log.warn("Could not resolve standard library dependency: " + dep);
-			}
-		}
-	}
-
-	private Path resolveStdPath(String qualifiedName)
-	{
-		// std::io -> std/io.neb
-		String relative = qualifiedName.replace("::", "/");
-
-		Path p = Path.of(relative + ".neb");
-		if (Files.exists(p))
-			return p;
-
-		// Try checking project root
-		Path parentP = Path.of("..").resolve(relative + ".neb");
-		if (Files.exists(parentP))
-			return parentP;
-
-		return null;
-	}
 }

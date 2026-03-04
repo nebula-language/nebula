@@ -8,8 +8,8 @@ import org.nebula.nebc.ast.types.TypeNode;
  * Examples:
  * <ul>
  * <li>{@code <T>} → name = "T", bound = null</li>
- * <li>{@code <T: Displayable>} → name = "T", bound =
- * NamedType("Displayable")</li>
+ * <li>{@code <T: Stringable>} → name = "T", bound =
+ * NamedType("Stringable")</li>
  * </ul>
  */
 public record GenericParam(String name, TypeNode bound)

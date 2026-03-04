@@ -4,11 +4,13 @@ import org.nebula.nebc.ast.declarations.MethodDeclaration;
 import org.nebula.nebc.semantic.SymbolTable;
 import org.nebula.nebc.semantic.symbol.MethodSymbol;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Represents the type of a declared trait (e.g. {@code trait Displayable}).
+ * Represents the type of a declared trait (e.g. {@code trait Stringable}).
  * <p>
  * A TraitType owns a member scope containing the abstract method signatures
  * that any implementing class must provide. Methods with default implementations
@@ -51,6 +53,33 @@ public final class TraitType extends CompositeType
     public Map<String, MethodSymbol> getRequiredMethods()
     {
         return requiredMethods;
+    }
+
+    /**
+     * Returns the ordered list of required-method names that defines the vtable
+     * slot layout for this trait. The order is the insertion order of
+     * {@link #addRequiredMethod}, which matches the source declaration order.
+     * This must remain stable so that all compiled modules agree on slot indices.
+     */
+    public List<String> getVtableMethodNames()
+    {
+        return new ArrayList<>(requiredMethods.keySet());
+    }
+
+    /**
+     * Returns the zero-based vtable slot index for the given method name,
+     * or {@code -1} if the method is not a required method.
+     */
+    public int getVtableSlotIndex(String methodName)
+    {
+        int idx = 0;
+        for (String name : requiredMethods.keySet())
+        {
+            if (name.equals(methodName))
+                return idx;
+            idx++;
+        }
+        return -1;
     }
 
     /** Returns all default method bodies keyed by method name. */

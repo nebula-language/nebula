@@ -2,7 +2,7 @@ package org.nebula.nebc.semantic.types;
 
 /**
  * Represents a generic type parameter placeholder such as {@code T} in
- * {@code void println<T: Displayable>(T item)}.
+ * {@code void println<T: Stringable>(T item)}.
  * <p>
  * During semantic analysis this type is used as a stand-in for the real
  * concrete type. During code generation the monomorphizer substitutes
@@ -14,7 +14,7 @@ public final class TypeParameterType extends Type
 
     /**
      * The trait bound on this parameter, or {@code null} if unconstrained.
-     * E.g. for {@code T: Displayable}, {@code bound} = TraitType("Displayable").
+     * E.g. for {@code T: Stringable}, {@code bound} = TraitType("Stringable").
      */
     private final TraitType bound;
 

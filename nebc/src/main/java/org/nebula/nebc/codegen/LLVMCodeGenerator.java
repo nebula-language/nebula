@@ -82,6 +82,11 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	private LLVMValueRef currentFunction;
 	private Type currentMethodReturnType;
 	/**
+	 * True when the current function is Nebula {@code void main()} promoted to LLVM {@code i32 main()}.
+	 * Used by return-statement emission to produce {@code ret i32 0} instead of {@code ret void}.
+	 */
+	private boolean currentFunctionIsVoidMain;
+	/**
 	 * Whether the current basic block has already been terminated (ret/br).
 	 */
 	private boolean currentBlockTerminated;
@@ -98,6 +103,24 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	// Ordered variant names per union (needed for switch generation).
 	private final Map<String, List<String>> unionVariantOrder = new HashMap<>();
 
+	// ── Erased-mode state (used during emitErasedFunctionBitcode) ──────────────
+	/**
+	 * When {@code true} the visitor is emitting a type-erased generic function.
+	 * TypeParameterType values become opaque {@code ptr} in LLVM, and calls to
+	 * trait methods on type-parameter-typed receivers are dispatched via vtable.
+	 */
+	private boolean isErasedMode = false;
+	/**
+	 * Maps each type-parameter name (e.g. {@code "T"}) to the corresponding
+	 * vtable {@link LLVMValueRef} parameter of the erased function being emitted.
+	 */
+	private final Map<String, LLVMValueRef> erasedVtableParams = new HashMap<>();
+	/**
+	 * Tracks erased-function names that have already been linked into {@code module}
+	 * so we never link the same bitcode module twice.
+	 */
+	private final Set<String> linkedErasedFunctions = new HashSet<>();
+
 	public LLVMCodeGenerator()
 	{
 	}
@@ -108,7 +131,28 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 	private LLVMValueRef emitCast(LLVMValueRef value, Type srcSemType, Type targetSemType)
 	{
-		if (value == null || srcSemType == null || targetSemType == null || srcSemType.equals(targetSemType))
+		if (value == null || srcSemType == null || targetSemType == null)
+			return value;
+
+		// Struct value → ptr coercion: when a struct value (returned by-value from
+		// a function/operator) is passed to a function that expects a pointer (the
+		// default ABI for composite parameters), spill to a temporary alloca.
+		// This must be checked BEFORE the short-circuit equality check because
+		// the semantic types may be equal (both IVec2) but the LLVM types differ
+		// (struct %IVec2 vs ptr).
+		if (srcSemType instanceof StructType srcSt && targetSemType instanceof CompositeType)
+		{
+			if (LLVMGetTypeKind(LLVMTypeOf(value)) != LLVMPointerTypeKind)
+			{
+				LLVMTypeRef structTy = LLVMTypeMapper.getOrCreateStructType(context, srcSt);
+				LLVMValueRef tmp = LLVMBuildAlloca(builder, structTy, "struct_arg_tmp");
+				LLVMBuildStore(builder, value, tmp);
+				return tmp;
+			}
+			return value;
+		}
+
+		if (srcSemType.equals(targetSemType))
 			return value;
 
 		// Optional coercions
@@ -130,6 +174,17 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		if (srcSemType instanceof PrimitiveType src && targetSemType instanceof PrimitiveType target)
 		{
+			// Bool → integer: zero-extend i1 to target width
+			if (src == PrimitiveType.BOOL && target.isInteger())
+			{
+				return LLVMBuildZExt(builder, value, targetType, "bool_to_int");
+			}
+			// Integer → bool: truncate to i1
+			if (src.isInteger() && target == PrimitiveType.BOOL)
+			{
+				return LLVMBuildTrunc(builder, value, targetType, "int_to_bool");
+			}
+
 			if (src.isInteger() && target.isInteger())
 			{
 				int srcWidth = src.getBitWidth();
@@ -393,10 +448,25 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		// 2. Extract types directly from the symbol
 		FunctionType funcType = symbol.getType();
 		Type returnType = funcType.getReturnType();
-		LLVMTypeRef llvmFuncType = toLLVMType(funcType);
 
 		// 4. Add the function to the module (or retrieve if already declared)
 		String funcName = (currentSubstitution != null) ? getSpecializationName(symbol) : symbol.getMangledName();
+
+		// When emitting the entry-point `main` with a Nebula-declared void return,
+		// promote the LLVM return type to i32 so the OS-level ABI is satisfied.
+		// `start.c` passes %eax to sys_exit; without promotion it holds garbage.
+		boolean isVoidMain = "main".equals(funcName) && returnType == PrimitiveType.VOID;
+		LLVMTypeRef llvmFuncType;
+		if (isVoidMain)
+		{
+			llvmFuncType = LLVMFunctionType(LLVMInt32TypeInContext(context),
+					new PointerPointer<LLVMTypeRef>(0L), 0, 0);
+		}
+		else
+		{
+			llvmFuncType = toLLVMType(funcType);
+		}
+
 		LLVMValueRef function = LLVMGetNamedFunction(module, funcName);
 		if (function == null || function.isNull())
 		{
@@ -422,8 +492,10 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		// 6. Manage Codegen State
 		LLVMValueRef prevFunction = currentFunction;
 		boolean prevTerminated = currentBlockTerminated;
+		boolean prevVoidMain = currentFunctionIsVoidMain;
 		currentFunction = function;
 		currentBlockTerminated = false;
+		currentFunctionIsVoidMain = isVoidMain;
 		Type prevReturnType = currentMethodReturnType;
 		currentMethodReturnType = returnType;
 
@@ -477,7 +549,14 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		{
 			if (returnType == PrimitiveType.VOID)
 			{
-				LLVMBuildRetVoid(builder);
+				if (isVoidMain)
+				{
+					LLVMBuildRet(builder, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0));
+				}
+				else
+				{
+					LLVMBuildRetVoid(builder);
+				}
 			}
 			else if (bodyResult != null)
 			{
@@ -494,6 +573,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		// 9. Restore State
 		currentFunction = prevFunction;
 		currentBlockTerminated = prevTerminated;
+		currentFunctionIsVoidMain = prevVoidMain;
 		currentMethodReturnType = prevReturnType;
 		namedValues.clear();
 		namedValues.putAll(prevNamedValues);
@@ -572,11 +652,10 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 					LLVMValueRef initVal = decl.initializer().accept(this);
 					if (initVal != null)
 					{
-						// Operator/method calls return a ptr to a (possibly short-lived) alloca.
-						// Load the struct value through the pointer immediately so we get a
-						// fresh copy in our own alloca before any subsequent call clobbers the
-						// source frame.  Constructor calls already produce a struct value
-						// (via emitConstructorCall's load), so no extra load is needed for them.
+						// If the initializer produced a pointer (e.g. a class-returning
+						// function or an identifier that resolves to a ptr), load the
+						// struct value through it.  Struct-returning functions and
+						// constructors already produce a struct value directly.
 						if (LLVMGetTypeKind(LLVMTypeOf(initVal)) == LLVMPointerTypeKind)
 						{
 							initVal = LLVMBuildLoad2(builder, structLlvmType, initVal, "struct_copy");
@@ -1053,7 +1132,14 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		if (node.value == null)
 		{
-			LLVMBuildRetVoid(builder);
+			if (currentFunctionIsVoidMain)
+			{
+				LLVMBuildRet(builder, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0));
+			}
+			else
+			{
+				LLVMBuildRetVoid(builder);
+			}
 		}
 		else
 		{
@@ -1102,9 +1188,15 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			return emitCast(value, srcType, retType);
 		}
 
-		// Composite (struct) values are passed by pointer in LLVM IR.  If the body
-		// produced a struct value directly (e.g. fat-arrow operator body), store it
-		// to an alloca and return the pointer so the LLVM function signature matches.
+		// Structs are value types — returned by value (the LLVM struct type itself).
+		// The caller's function signature expects a struct aggregate, not a pointer.
+		if (retType instanceof StructType && srcType instanceof CompositeType)
+		{
+			// The value is already a loaded struct aggregate — return it directly.
+			return value;
+		}
+
+		// Classes are reference types — return a pointer.
 		if (retType instanceof CompositeType retCt && srcType instanceof CompositeType)
 		{
 			LLVMTypeRef structType = LLVMTypeMapper.getOrCreateStructType(context, retCt);
@@ -2185,6 +2277,19 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	{
 		LLVMValueRef function = null;
 
+		// ── Erased-mode: intercept trait-method calls on TypeParameterType receivers ──
+		// When emitting a type-erased generic function body, any call of the form
+		//   item.traitMethod(...)  where item : T (TypeParameterType)
+		// must be emitted as an indirect call through the vtable parameter for T.
+		if (isErasedMode && node.target instanceof MemberAccessExpression mae)
+		{
+			Type receiverOriginalType = analyzer.getType(mae.target);
+			if (receiverOriginalType instanceof TypeParameterType tpt && tpt.hasBound())
+			{
+				return emitErasedVtableCall(node, mae, tpt);
+			}
+		}
+
 		// Detect generic call and trigger monomorphization
 		if (node.getTypeArguments() != null && !node.getTypeArguments().isEmpty())
 		{
@@ -2207,10 +2312,17 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 					MethodDeclaration decl = (MethodDeclaration) ms.getDeclarationNode();
 					if (decl == null)
 					{
+						// The declaration is unavailable (imported from a .nebsym library).
+						// If this method carries pre-compiled erased bitcode, use vtable dispatch.
+						if (ms.getGenericBitcode() != null && ms.getGenericBitcode().length > 0)
+						{
+							function = emitErasedCall(node, ms);
+							currentSubstitution = prevSub;
+							return function;
+						}
 						throw new CodegenException(
 							"Cannot monomorphize generic method '" + ms.getName() +
-							"': its declaration node is unavailable. " +
-							"Ensure the standard library source is being compiled alongside this project.");
+							"': its declaration node is unavailable and no erased bitcode is present.");
 					}
 					function = visitMethodDeclaration(decl);
 
@@ -2451,9 +2563,24 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		{
 			ctorFnType = ms.getType();
 		}
+		// When the target resolves to a TypeSymbol (e.g. "Vec2" → Vec2's TypeSymbol),
+		// retrieve the constructor's declared FunctionType from the composite type's
+		// member scope so that parameter types (f32, i64, …) are used correctly
+		// rather than the possibly-wider types inferred from the argument literals.
 		if (ctorFnType == null)
 		{
-			// Fall back: build param types manually from the arguments
+			String ctorKey = node.target instanceof IdentifierExpression ie ? ie.name : ct.name();
+			Symbol ctorMember = ct.getMemberScope().resolveLocal(ctorKey);
+			if (ctorMember instanceof MethodSymbol ctorMs)
+			{
+				ctorFnType = ctorMs.getType();
+			}
+		}
+		if (ctorFnType == null)
+		{
+			// Last-resort fallback: infer param types from argument semantic types.
+			// This may produce ABI mismatches for literal args (e.g. f64 passed to f32
+			// parameter); prefer the declared constructor FunctionType above.
 			List<Type> pts = new ArrayList<>();
 			pts.add(PrimitiveType.REF); // 'this'
 			for (Expression arg : node.arguments)
@@ -3024,102 +3151,145 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitStringInterpolationExpression(StringInterpolationExpression node)
 	{
-		// Strategy: build a format string from the parts, then call snprintf into a
-		// fixed-size stack buffer, and return a { i8*, i64 } str struct.
-		//
-		// Literal string parts are emitted as-is; expression parts are formatted
-		// with a type-specific printf specifier.
+		// Strategy: convert each interpolated part to a NebulaStr using the runtime's
+		// __nebula_rt_*_to_str helpers, store all parts in a stack-allocated array, and
+		// call __nebula_rt_str_concat(parts, count) to produce a heap-allocated result.
+		// This avoids any libc / snprintf dependency and correctly evaluates to a str value.
 
-		final int BUF_SIZE = 512;
-		LLVMTypeRef i8t   = LLVMInt8TypeInContext(context);
-		LLVMTypeRef i32t  = LLVMInt32TypeInContext(context);
-		LLVMTypeRef i64t  = LLVMInt64TypeInContext(context);
-		LLVMTypeRef ptrT  = LLVMPointerTypeInContext(context, 0);
+		LLVMTypeRef i64t = LLVMInt64TypeInContext(context);
+		LLVMTypeRef strT = LLVMTypeMapper.getOrCreateStructType(context, PrimitiveType.STR);
 
-		// Allocate output buffer
-		LLVMTypeRef bufType  = LLVMArrayType(i8t, BUF_SIZE);
-		LLVMValueRef bufAlloca = LLVMBuildAlloca(builder, bufType, "interp_buf");
-		LLVMValueRef[] firstIdx = {LLVMConstInt(i64t, 0, 0), LLVMConstInt(i64t, 0, 0)};
-		LLVMValueRef bufPtr = LLVMBuildGEP2(builder, bufType, bufAlloca,
-			new PointerPointer<>(firstIdx), 2, "buf_ptr");
-
-		// Build the format string and collect expression args
-		StringBuilder fmtSb = new StringBuilder();
-		List<LLVMValueRef> fmtArgs = new ArrayList<>();
-
+		// ── 1. Convert each interpolation part to a NebulaStr value ─────────────────
+		List<LLVMValueRef> parts = new ArrayList<>();
 		for (Expression part : node.parts)
 		{
-			if (part instanceof LiteralExpression le && le.type == LiteralExpression.LiteralType.STRING)
-			{
-				// Raw string fragment — append verbatim (escape % signs)
-				fmtSb.append(le.value.toString().replace("%", "%%"));
-			}
-			else
-			{
-				LLVMValueRef argVal = part.accept(this);
-				if (argVal == null)
-					continue;
-				Type partType = analyzer.getType(part);
-				if (partType == PrimitiveType.STR)
-				{
-					// Extract the i8* pointer from the str struct
-					fmtSb.append("%s");
-					fmtArgs.add(LLVMBuildExtractValue(builder, argVal, 0, "str_arg_ptr"));
-				}
-				else if (partType == PrimitiveType.F64 || partType == PrimitiveType.F32)
-				{
-					fmtSb.append("%g");
-					fmtArgs.add(emitCast(argVal, partType, PrimitiveType.F64));
-				}
-				else if (partType == PrimitiveType.BOOL)
-				{
-					fmtSb.append("%d");
-					fmtArgs.add(emitCast(argVal, partType, PrimitiveType.I32));
-				}
-				else if (partType == PrimitiveType.I64 || partType == PrimitiveType.U64)
-				{
-					fmtSb.append("%ld");
-					fmtArgs.add(argVal);
-				}
-				else
-				{
-					// Default: treat as i32
-					fmtSb.append("%d");
-					fmtArgs.add(emitCast(argVal, partType, PrimitiveType.I32));
-				}
-			}
+			LLVMValueRef strVal = emitInterpolationPartAsStr(part);
+			if (strVal != null)
+				parts.add(strVal);
 		}
 
-		// Emit the format string as a global constant
-		String fmtStr = fmtSb.toString();
-		LLVMValueRef fmtGlobal = LLVMBuildGlobalStringPtr(builder, fmtStr, "interp_fmt");
+		int count = parts.size();
 
-		// Declare snprintf if needed: i32 snprintf(i8*, i64, i8*, ...)
-		LLVMTypeRef snprintfType = LLVMFunctionType(i32t,
-			new PointerPointer<>(new LLVMTypeRef[]{ptrT, i64t, ptrT}), 3, /* isVarArg */ 1);
-		LLVMValueRef snprintf = getOrDeclareIntrinsic("snprintf", snprintfType);
+		// ── 2. Build a stack-allocated array of NebulaStr ────────────────────────────
+		LLVMTypeRef arrType   = LLVMArrayType(strT, count);
+		LLVMValueRef arrAlloca = LLVMBuildAlloca(builder, arrType, "interp_parts");
 
-		// Build arg list: buf, BUF_SIZE, fmt, [args...]
-		int totalArgs = 3 + fmtArgs.size();
-		LLVMValueRef[] callArgs = new LLVMValueRef[totalArgs];
-		callArgs[0] = bufPtr;
-		callArgs[1] = LLVMConstInt(i64t, BUF_SIZE, 0);
-		callArgs[2] = fmtGlobal;
-		for (int i = 0; i < fmtArgs.size(); i++)
-			callArgs[3 + i] = fmtArgs.get(i);
+		for (int i = 0; i < count; i++)
+		{
+			LLVMValueRef[] indices = {
+				LLVMConstInt(i64t, 0, 0),
+				LLVMConstInt(i64t, i, 0)
+			};
+			LLVMValueRef elemPtr = LLVMBuildGEP2(builder, arrType, arrAlloca,
+				new PointerPointer<>(indices), 2, "ipart_ptr_" + i);
+			LLVMBuildStore(builder, parts.get(i), elemPtr);
+		}
 
-		LLVMValueRef writtenI32 = LLVMBuildCall2(builder, snprintfType, snprintf,
-			new PointerPointer<>(callArgs), totalArgs, "snprintf_res");
+		// Get pointer to first element (i.e. ptr to the array start)
+		LLVMValueRef[] firstIdx = { LLVMConstInt(i64t, 0, 0), LLVMConstInt(i64t, 0, 0) };
+		LLVMValueRef partsPtr   = LLVMBuildGEP2(builder, arrType, arrAlloca,
+			new PointerPointer<>(firstIdx), 2, "interp_parts_ptr");
 
-		// Build the resulting str struct: { i8* buf, i64 len }
-		LLVMValueRef writtenI64 = LLVMBuildSExt(builder, writtenI32, i64t, "interp_len");
-		LLVMTypeRef strStructType = LLVMTypeMapper.getOrCreateStructType(context, PrimitiveType.STR);
-		LLVMValueRef strStruct = LLVMBuildAlloca(builder, strStructType, "interp_str");
-		LLVMValueRef ptrField = LLVMBuildStructGEP2(builder, strStructType, strStruct, 0, "istr_ptr_f");
-		LLVMValueRef lenField = LLVMBuildStructGEP2(builder, strStructType, strStruct, 1, "istr_len_f");
-		LLVMBuildStore(builder, bufPtr, ptrField);
-		LLVMBuildStore(builder, writtenI64, lenField);
-		return LLVMBuildLoad2(builder, strStructType, strStruct, "interp_str_val");
+		// ── 3. Call __nebula_rt_str_concat(parts_ptr, count) ────────────────────────
+		LLVMTypeRef ptrT       = LLVMPointerTypeInContext(context, 0);
+		LLVMTypeRef concatType = LLVMFunctionType(strT,
+			new PointerPointer<>(new LLVMTypeRef[]{ ptrT, i64t }), 2, /* varArg */ 0);
+		LLVMValueRef concatFn  = getOrDeclareIntrinsic("__nebula_rt_str_concat", concatType);
+
+		LLVMValueRef[] callArgs = {
+			partsPtr,
+			LLVMConstInt(i64t, count, 0)
+		};
+		return LLVMBuildCall2(builder, concatType, concatFn,
+			new PointerPointer<>(callArgs), 2, "interp_result");
+	}
+
+	/**
+	 * Converts a single string-interpolation part expression to a {@code NebulaStr}
+	 * ({@code { ptr, i64 }}) LLVM value.
+	 *
+	 * <ul>
+	 *   <li>Literal string fragments → constant {@code { ptr, len }} struct.</li>
+	 *   <li>{@code str} expressions → used directly.</li>
+	 *   <li>Integer / float / bool types → forwarded to the appropriate
+	 *       {@code __nebula_rt_*_to_str} runtime helper.</li>
+	 * </ul>
+	 */
+	private LLVMValueRef emitInterpolationPartAsStr(Expression part)
+	{
+		LLVMTypeRef i32t = LLVMInt32TypeInContext(context);
+		LLVMTypeRef i64t = LLVMInt64TypeInContext(context);
+		LLVMTypeRef strT = LLVMTypeMapper.getOrCreateStructType(context, PrimitiveType.STR);
+
+		// ── Literal string fragments ─────────────────────────────────────────────────
+		if (part instanceof LiteralExpression le && le.type == LiteralExpression.LiteralType.STRING)
+		{
+			String text           = le.value.toString();
+			LLVMValueRef gstr     = LLVMBuildGlobalStringPtr(builder, text, "istr_lit");
+			LLVMValueRef strAlloca = LLVMBuildAlloca(builder, strT, "istr_val");
+			LLVMBuildStore(builder, gstr,
+				LLVMBuildStructGEP2(builder, strT, strAlloca, 0, "istr_ptr"));
+			LLVMBuildStore(builder, LLVMConstInt(i64t, text.length(), 0),
+				LLVMBuildStructGEP2(builder, strT, strAlloca, 1, "istr_len"));
+			return LLVMBuildLoad2(builder, strT, strAlloca, "istr_lit_val");
+		}
+
+		// ── Evaluate the expression ──────────────────────────────────────────────────
+		LLVMValueRef argVal = part.accept(this);
+		if (argVal == null)
+			return null;
+
+		Type partType = analyzer.getType(part);
+		if (partType == null)
+			return null;
+
+		// Already a str — use directly
+		if (partType == PrimitiveType.STR)
+			return argVal;
+
+		// bool → __nebula_rt_bool_to_str(i32)
+		if (partType == PrimitiveType.BOOL)
+		{
+			LLVMTypeRef fnType = LLVMFunctionType(strT,
+				new PointerPointer<>(new LLVMTypeRef[]{ i32t }), 1, 0);
+			LLVMValueRef fn    = getOrDeclareIntrinsic("__nebula_rt_bool_to_str", fnType);
+			LLVMValueRef asI32 = LLVMBuildZExt(builder, argVal, i32t, "bool_i32");
+			return LLVMBuildCall2(builder, fnType, fn,
+				new PointerPointer<>(new LLVMValueRef[]{ asI32 }), 1, "bool_str");
+		}
+
+		// float / double → __nebula_rt_f64_to_str(f64)
+		if (partType == PrimitiveType.F64 || partType == PrimitiveType.F32)
+		{
+			LLVMTypeRef f64t   = LLVMDoubleTypeInContext(context);
+			LLVMTypeRef fnType = LLVMFunctionType(strT,
+				new PointerPointer<>(new LLVMTypeRef[]{ f64t }), 1, 0);
+			LLVMValueRef fn    = getOrDeclareIntrinsic("__nebula_rt_f64_to_str", fnType);
+			LLVMValueRef asF64 = emitCast(argVal, partType, PrimitiveType.F64);
+			return LLVMBuildCall2(builder, fnType, fn,
+				new PointerPointer<>(new LLVMValueRef[]{ asF64 }), 1, "f64_str");
+		}
+
+		// unsigned integers → __nebula_rt_u64_to_str(u64)
+		if (isUnsignedType(partType))
+		{
+			LLVMTypeRef fnType  = LLVMFunctionType(strT,
+				new PointerPointer<>(new LLVMTypeRef[]{ i64t }), 1, 0);
+			LLVMValueRef fn     = getOrDeclareIntrinsic("__nebula_rt_u64_to_str", fnType);
+			LLVMValueRef asU64  = emitCast(argVal, partType, PrimitiveType.U64);
+			return LLVMBuildCall2(builder, fnType, fn,
+				new PointerPointer<>(new LLVMValueRef[]{ asU64 }), 1, "u64_str");
+		}
+
+		// signed integers (default) → __nebula_rt_i64_to_str(i64)
+		{
+			LLVMTypeRef fnType  = LLVMFunctionType(strT,
+				new PointerPointer<>(new LLVMTypeRef[]{ i64t }), 1, 0);
+			LLVMValueRef fn     = getOrDeclareIntrinsic("__nebula_rt_i64_to_str", fnType);
+			LLVMValueRef asI64  = emitCast(argVal, partType, PrimitiveType.I64);
+			return LLVMBuildCall2(builder, fnType, fn,
+				new PointerPointer<>(new LLVMValueRef[]{ asI64 }), 1, "i64_str");
+		}
 	}
 
 	private void emitIfExpressionBranch(LLVMBasicBlockRef bb, ExpressionBlock expr, LLVMValueRef resultPtr, LLVMBasicBlockRef mergeBB)
@@ -3694,6 +3864,608 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			currentBlockTerminated = true;
 		}
 		return null;
+	}
+
+	// =========================================================================
+	// Erased-function emission (library generics / bitcode path)
+	// =========================================================================
+
+	/**
+	 * Emits a type-erased LLVM function for {@code ms} into a fresh module that
+	 * shares the current LLVM context.  Returns the bitcode bytes of that module.
+	 *
+	 * <p>The erased function replaces each type-parameter {@code T} (with bound
+	 * {@code Trait}) by an opaque {@code ptr}, and adds one extra {@code ptr}
+	 * parameter per type-parameter that carries the trait vtable.  Calls to trait
+	 * methods inside the body are emitted as vtable-indirect calls.</p>
+	 *
+	 * <p>LLVM's constant-propagation / inlining eliminates all vtable overhead at
+	 * consumer compile time when the vtable is a compile-time constant (which it
+	 * always is in Nebula).</p>
+	 *
+	 * @param decl The method declaration AST node (required – must be non-null).
+	 * @param ms   The corresponding semantic symbol (must have type parameters).
+	 * @return Serialised LLVM bitcode bytes, or {@code null} on failure.
+	 */
+	public byte[] emitErasedFunctionBitcode(MethodDeclaration decl, MethodSymbol ms)
+	{
+		if (decl == null || ms.getTypeParameters().isEmpty())
+			return null;
+
+		// ── 1. Build the erased substitution: every TypeParam → REF (= opaque ptr) ─
+		Substitution erasedSub = new Substitution();
+		for (TypeParameterType tpt : ms.getTypeParameters())
+		{
+			erasedSub.bind(tpt, PrimitiveType.REF);
+		}
+
+		// ── 2. Save ALL codegen state ────────────────────────────────────────────────
+		LLVMModuleRef  savedModule              = this.module;
+		LLVMBuilderRef savedBuilder             = this.builder;
+		boolean        savedErasedMode          = this.isErasedMode;
+		Substitution   savedSub                 = this.currentSubstitution;
+		LLVMValueRef   savedFunction            = this.currentFunction;
+		boolean        savedTerminated          = this.currentBlockTerminated;
+		Type           savedRetType             = this.currentMethodReturnType;
+		Map<String, LLVMValueRef> savedNamed    = new HashMap<>(this.namedValues);
+		Set<String>    savedInlineStruct        = new HashSet<>(this.inlineStructVars);
+		Map<String, Integer> savedArrayCounts   = new HashMap<>(this.arrayElementCounts);
+		Map<String, LLVMValueRef> savedVtable   = new HashMap<>(this.erasedVtableParams);
+
+		// ── 3. Create a fresh module in the SAME context ─────────────────────────────
+		String erasedModName = ms.getMangledName() + "__erased_mod";
+		LLVMModuleRef erasedModule = LLVMModuleCreateWithNameInContext(
+				new BytePointer(erasedModName), context);
+
+		// Copy target triple & data layout so the consumer can link without issues
+		BytePointer triple = LLVMGetTarget(savedModule);
+		if (triple != null && !triple.isNull())
+			LLVMSetTarget(erasedModule, triple);
+		BytePointer layout = LLVMGetDataLayoutStr(savedModule);
+		if (layout != null && !layout.isNull())
+			LLVMSetDataLayout(erasedModule, layout);
+
+		// Create a dedicated builder for the erased module
+		LLVMBuilderRef erasedBuilder = LLVMCreateBuilderInContext(context);
+
+		// ── 4. Switch to erased state ────────────────────────────────────────────────
+		this.module             = erasedModule;
+		this.builder            = erasedBuilder;
+		this.isErasedMode       = true;
+		this.currentSubstitution = erasedSub;
+		this.namedValues.clear();
+		this.inlineStructVars.clear();
+		this.arrayElementCounts.clear();
+		this.erasedVtableParams.clear();
+
+		try
+		{
+			// ── 5. Build the erased function signature ───────────────────────────────
+			// Original params with T → REF (ptr), plus one extra ptr per type param
+			// that carries its bound trait's vtable.
+			FunctionType origType = ms.getType();
+			List<LLVMTypeRef> llvmParams = new ArrayList<>();
+			LLVMTypeRef ptrType = LLVMPointerTypeInContext(context, 0);
+
+			// Substituted parameter types (T → ptr)
+			for (Type pt : origType.getParameterTypes())
+			{
+				llvmParams.add(toLLVMType(erasedSub.substitute(pt)));
+			}
+
+			// One vtable ptr per type parameter that has a bound
+			Map<String, Integer> vtableParamOffsets = new java.util.LinkedHashMap<>();
+			for (TypeParameterType tpt : ms.getTypeParameters())
+			{
+				if (tpt.hasBound())
+				{
+					vtableParamOffsets.put(tpt.name(), llvmParams.size());
+					llvmParams.add(ptrType);
+				}
+			}
+
+			LLVMTypeRef retType  = toLLVMType(erasedSub.substitute(origType.getReturnType()));
+			LLVMTypeRef[] paramArr = llvmParams.toArray(new LLVMTypeRef[0]);
+			LLVMTypeRef erasedFnType = LLVMFunctionType(
+					retType,
+					new PointerPointer<>(paramArr),
+					paramArr.length,
+					0);
+
+			String erasedName = ms.getMangledName() + "__erased";
+			LLVMValueRef erasedFn = LLVMAddFunction(erasedModule, new BytePointer(erasedName), erasedFnType);
+			LLVMSetLinkage(erasedFn, LLVMExternalLinkage);
+
+			// ── 6. Set up entry block and bind parameters ────────────────────────────
+			LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(context, erasedFn, new BytePointer("entry"));
+			LLVMPositionBuilderAtEnd(erasedBuilder, entry);
+
+			this.currentFunction         = erasedFn;
+			this.currentBlockTerminated  = false;
+			this.currentMethodReturnType = origType.getReturnType();
+
+			// Bind regular parameters
+			int llvmParamIdx = 0;
+			// Skip 'this' if first LLVM param count > declared params (member method)
+			if (origType.getParameterTypes().size() > decl.parameters.size())
+			{
+				LLVMValueRef thisVal = LLVMGetParam(erasedFn, llvmParamIdx++);
+				Type thisType = erasedSub.substitute(origType.getParameterTypes().get(0));
+				LLVMValueRef thisAlloca = LLVMBuildAlloca(erasedBuilder, toLLVMType(thisType), new BytePointer("this"));
+				LLVMBuildStore(erasedBuilder, thisVal, thisAlloca);
+				namedValues.put("this", thisAlloca);
+			}
+			for (int i = 0; i < decl.parameters.size(); i++)
+			{
+				Parameter param  = decl.parameters.get(i);
+				LLVMValueRef pv  = LLVMGetParam(erasedFn, llvmParamIdx++);
+				Type paramSemType = erasedSub.substitute(origType.getParameterTypes().get(llvmParamIdx - 1));
+				LLVMValueRef alloca = LLVMBuildAlloca(erasedBuilder, toLLVMType(paramSemType), new BytePointer(param.name()));
+				LLVMBuildStore(erasedBuilder, pv, alloca);
+				namedValues.put(param.name(), alloca);
+			}
+			// Bind vtable parameters
+			for (Map.Entry<String, Integer> e : vtableParamOffsets.entrySet())
+			{
+				erasedVtableParams.put(e.getKey(), LLVMGetParam(erasedFn, e.getValue()));
+			}
+
+			// ── 7. Visit the method body ─────────────────────────────────────────────
+			if (decl.body != null)
+			{
+				decl.body.accept(this);
+			}
+			if (!currentBlockTerminated)
+			{
+				if (origType.getReturnType() == PrimitiveType.VOID)
+					LLVMBuildRetVoid(erasedBuilder);
+				else
+					LLVMBuildRet(erasedBuilder, LLVMGetUndef(retType));
+			}
+
+			// ── 8. Serialize to bitcode ──────────────────────────────────────────────
+			LLVMMemoryBufferRef bitcodeBuf = LLVMWriteBitcodeToMemoryBuffer(erasedModule);
+			long   size   = LLVMGetBufferSize(bitcodeBuf);
+			BytePointer data = LLVMGetBufferStart(bitcodeBuf);
+			byte[] result = new byte[(int) size];
+			for (int i = 0; i < (int) size; i++)
+				result[i] = data.get(i);
+			LLVMDisposeMemoryBuffer(bitcodeBuf);
+			return result;
+		}
+		catch (Exception e)
+		{
+			org.nebula.nebc.util.Log.warn("Failed to emit erased bitcode for " + ms.getName() + ": " + e.getMessage());
+			return null;
+		}
+		finally
+		{
+			// ── 9. Dispose erased resources and restore main state ───────────────────
+			LLVMDisposeBuilder(erasedBuilder);
+			LLVMDisposeModule(erasedModule);
+
+			this.module              = savedModule;
+			this.builder             = savedBuilder;
+			this.isErasedMode        = savedErasedMode;
+			this.currentSubstitution = savedSub;
+			this.currentFunction     = savedFunction;
+			this.currentBlockTerminated = savedTerminated;
+			this.currentMethodReturnType = savedRetType;
+			this.namedValues.clear();
+			this.namedValues.putAll(savedNamed);
+			this.inlineStructVars.clear();
+			this.inlineStructVars.addAll(savedInlineStruct);
+			this.arrayElementCounts.clear();
+			this.arrayElementCounts.putAll(savedArrayCounts);
+			this.erasedVtableParams.clear();
+			this.erasedVtableParams.putAll(savedVtable);
+		}
+	}
+
+	// ── Erased vtable call (inside the erased function body) ────────────────────
+
+	/**
+	 * Emits an indirect vtable call for {@code item.method(args)} where
+	 * {@code item} has a TypeParameterType bound to a trait.
+	 *
+	 * <p>The vtable is stored as a {@code ptr} parameter added to the erased
+	 * function for the type parameter {@code T}.  The slot index is determined
+	 * by the trait's stable method ordering.</p>
+	 */
+	private LLVMValueRef emitErasedVtableCall(
+			InvocationExpression node,
+			MemberAccessExpression mae,
+			TypeParameterType tpt)
+	{
+		LLVMTypeRef ptrType = LLVMPointerTypeInContext(context, 0);
+
+		// Emit the receiver (loads the ptr value from the parameter alloca)
+		LLVMValueRef receiverPtr = mae.target.accept(this);
+
+		// Get the vtable parameter for this type parameter
+		LLVMValueRef vtable = erasedVtableParams.get(tpt.name());
+		if (vtable == null)
+			throw new CodegenException("No vtable parameter for type param '" + tpt.name() + "'");
+
+		TraitType bound = tpt.getBound();
+		int slotIndex = bound.getVtableSlotIndex(mae.memberName);
+		if (slotIndex < 0)
+			throw new CodegenException("Method '" + mae.memberName + "' not found in trait '" + bound.name() + "'");
+
+		// Build the vtable struct type: { ptr, ptr, ... } (one slot per required method)
+		int numSlots = bound.getVtableMethodNames().size();
+		LLVMTypeRef[] slotTypes = new LLVMTypeRef[numSlots];
+		java.util.Arrays.fill(slotTypes, ptrType);
+		LLVMTypeRef vtableStructType = LLVMStructTypeInContext(
+				context, new PointerPointer<>(slotTypes), numSlots, 0);
+
+		// GEP to the slot and load the function pointer
+		LLVMValueRef slotAddr = LLVMBuildStructGEP2(
+				builder, vtableStructType, vtable, slotIndex,
+				new BytePointer("vtable_slot_" + slotIndex));
+		LLVMValueRef fnPtr = LLVMBuildLoad2(builder, ptrType, slotAddr,
+				new BytePointer("vtable_fn"));
+
+		// The vtable slot fn type: (ptr %self) -> traitReturnType
+		MethodSymbol traitMethod = bound.getRequiredMethods().get(mae.memberName);
+		Type returnType = traitMethod.getType().getReturnType();
+		LLVMTypeRef retLlvmType  = toLLVMType(returnType);
+		LLVMTypeRef[] fnArgTypes = { ptrType };
+		LLVMTypeRef vtableFnType = LLVMFunctionType(
+				retLlvmType, new PointerPointer<>(fnArgTypes), 1, 0);
+
+		// Call the slot fn
+		LLVMValueRef[] callArgs = { receiverPtr };
+		String callName = returnType == PrimitiveType.VOID ? "" : "vtable_call";
+		return LLVMBuildCall2(builder, vtableFnType, fnPtr,
+				new PointerPointer<>(callArgs), 1, callName);
+	}
+
+	// ── Erased call site (consumer compilation) ─────────────────────────────────
+
+	/**
+	 * Emits the complete call sequence for a library generic method that has
+	 * pre-compiled erased bitcode.
+	 *
+	 * <p>Steps:</p>
+	 * <ol>
+	 *   <li>Link the erased bitcode module into {@code module} (once per function).</li>
+	 *   <li>Box each argument: alloca + store, pass the stack address as {@code ptr}.</li>
+	 *   <li>Build a compile-time vtable constant for each type argument.</li>
+	 *   <li>Call the erased function with the boxed args + vtable ptrs.</li>
+	 * </ol>
+	 *
+	 * <p>LLVM's inliner + constant-propagation eliminates all boxing and vtable
+	 * overhead — the resulting assembly is identical to static monomorphization.</p>
+	 */
+	private LLVMValueRef emitErasedCall(InvocationExpression node, MethodSymbol ms)
+	{
+		String erasedName = ms.getMangledName() + "__erased";
+
+		// ── 1. Link the bitcode module (idempotent) ──────────────────────────────────
+		if (!linkedErasedFunctions.contains(erasedName))
+		{
+			linkErasedBitcode(ms, erasedName);
+			linkedErasedFunctions.add(erasedName);
+		}
+
+		LLVMValueRef erasedFn = LLVMGetNamedFunction(module, new BytePointer(erasedName));
+		if (erasedFn == null || erasedFn.isNull())
+			throw new CodegenException("Erased function '" + erasedName + "' not found after linking");
+
+		// ── 2. Collect call args: box originals + vtable ptrs ────────────────────────
+
+		// Determine effective argument nodes (may need to prepend receiver for member calls)
+		List<Expression> argNodes = new ArrayList<>(node.arguments);
+		if (node.target instanceof MemberAccessExpression mae)
+		{
+			FunctionType ft = ms.getType();
+			if (!ft.getParameterTypes().isEmpty())
+			{
+				Type firstParam = ft.getParameterTypes().get(0);
+				Type receiverType = analyzer.getType(mae.target);
+				if (receiverMatchesFirstParamErased(receiverType, firstParam))
+					argNodes.add(0, mae.target);
+			}
+		}
+
+		// Resolve concrete type arguments: explicit ones first, then inferred from args
+		List<Type> typeArgs = (node.getTypeArguments() != null && !node.getTypeArguments().isEmpty())
+				? node.getTypeArguments()
+				: inferTypeArgsForErased(ms, argNodes);
+
+		List<LLVMValueRef> callArgs = new ArrayList<>();
+
+		// Box each argument
+		for (Expression argNode : argNodes)
+		{
+			LLVMValueRef argVal    = argNode.accept(this);
+			Type         argSemTy  = analyzer.getType(argNode);
+			LLVMTypeRef  argLlvmTy = toLLVMType(argSemTy);
+
+			// If argSemTy is a composite and argVal is already a pointer (e.g. local
+			// variable alloca or inlined struct var), pass the pointer directly.
+			if (inlineStructVars.contains(argNode instanceof IdentifierExpression ie ? ie.name : "")
+					|| (argSemTy instanceof CompositeType && LLVMGetTypeKind(LLVMTypeOf(argVal)) == LLVMPointerTypeKind))
+			{
+				callArgs.add(argVal); // already a pointer to struct data
+			}
+			else
+			{
+				// Use the concrete struct LLVM type for composite args so the alloca is
+				// correctly sized. toLLVMType() returns opaque `ptr` for composites,
+				// which would silently mis-size the allocation for structs > ptr-width.
+				LLVMTypeRef boxTy = (argSemTy instanceof CompositeType ctArg)
+						? LLVMTypeMapper.getOrCreateStructType(context, ctArg)
+						: argLlvmTy;
+				LLVMValueRef alloca = LLVMBuildAlloca(builder, boxTy, new BytePointer("erased_arg_box"));
+				LLVMBuildStore(builder, argVal, alloca);
+				callArgs.add(alloca);
+			}
+		}
+
+		// One vtable ptr per type param with a bound
+		for (int i = 0; i < ms.getTypeParameters().size(); i++)
+		{
+			TypeParameterType tpt = ms.getTypeParameters().get(i);
+			if (tpt.hasBound() && i < typeArgs.size())
+			{
+				LLVMValueRef vtable = getOrCreateConcreteVtable(tpt.getBound(), typeArgs.get(i));
+				callArgs.add(vtable);
+			}
+		}
+
+		// ── 3. Build the call ─────────────────────────────────────────────────────────
+		LLVMTypeRef erasedFnType = LLVMGlobalGetValueType(erasedFn);
+		LLVMValueRef[] argsArr   = callArgs.toArray(new LLVMValueRef[0]);
+		Type retType = ms.getType().getReturnType();
+		String callName = retType == PrimitiveType.VOID ? "" : "erased_call";
+		return LLVMBuildCall2(builder, erasedFnType, erasedFn,
+				new PointerPointer<>(argsArr), argsArr.length, callName);
+	}
+
+	/**
+	 * Infers concrete type arguments for an erased call by matching actual argument
+	 * types against the declared type-parameter positions in the method signature.
+	 *
+	 * <p>For {@code println<T: Stringable>(item: T)} called as {@code println(x)},
+	 * this returns {@code [typeof(x)]} so the caller can build the vtable.</p>
+	 */
+	private List<Type> inferTypeArgsForErased(MethodSymbol ms, List<Expression> argNodes)
+	{
+		FunctionType ft = ms.getType();
+		List<Type> paramTypes = ft.getParameterTypes();
+		List<TypeParameterType> typeParams = ms.getTypeParameters();
+
+		// Build a map: TypeParameterType → concrete Type by matching param positions
+		Map<String, Type> resolved = new java.util.LinkedHashMap<>();
+		int argOffset = (paramTypes.size() > argNodes.size()) ? (paramTypes.size() - argNodes.size()) : 0;
+
+		for (int i = argOffset; i < paramTypes.size() && (i - argOffset) < argNodes.size(); i++)
+		{
+			Type declared = paramTypes.get(i);
+			if (declared instanceof TypeParameterType tpt)
+			{
+				if (!resolved.containsKey(tpt.name()))
+				{
+					Type actual = analyzer.getType(argNodes.get(i - argOffset));
+					if (actual != null)
+						resolved.put(tpt.name(), actual);
+				}
+			}
+		}
+
+		// Return in type-parameter declaration order
+		List<Type> result = new ArrayList<>();
+		for (TypeParameterType tpt : typeParams)
+		{
+			Type concrete = resolved.get(tpt.name());
+			result.add(concrete != null ? concrete : PrimitiveType.REF);
+		}
+		return result;
+	}
+
+	private boolean receiverMatchesFirstParamErased(Type receiverType, Type firstParam)
+	{
+		if (receiverType instanceof TypeParameterType || firstParam instanceof TypeParameterType)
+			return false; // erased calls don't need this check
+		return receiverType.name().equals(firstParam.name())
+				|| (firstParam == PrimitiveType.REF && receiverType instanceof CompositeType);
+	}
+
+	/**
+	 * Links the erased bitcode stored on {@code ms} into {@code module}.
+	 * Uses {@link LLVM#LLVMParseBitcodeInContext2} to load into the current context
+	 * and {@link LLVM#LLVMLinkModules2} to merge.
+	 */
+	private void linkErasedBitcode(MethodSymbol ms, String erasedName)
+	{
+		byte[] bitcode = ms.getGenericBitcode();
+		if (bitcode == null || bitcode.length == 0)
+			return;
+
+		BytePointer dataPtr = new BytePointer(bitcode.length);
+		dataPtr.put(bitcode, 0, bitcode.length);
+		LLVMMemoryBufferRef buf = LLVMCreateMemoryBufferWithMemoryRangeCopy(
+				dataPtr, bitcode.length, new BytePointer("erased_" + erasedName));
+		dataPtr.deallocate();
+
+		// Parse into the current context
+		PointerPointer<LLVMModuleRef> outModPtr = new PointerPointer<>(1L);
+		int parseErr = LLVMParseBitcodeInContext2(context, buf, outModPtr);
+		LLVMDisposeMemoryBuffer(buf);
+
+		if (parseErr != 0)
+			throw new CodegenException("Failed to parse erased bitcode for '" + erasedName + "'");
+
+		LLVMModuleRef parsedMod = new LLVMModuleRef(outModPtr.get());
+
+		// Merge into main module (parsedMod is consumed / destroyed)
+		if (LLVMLinkModules2(module, parsedMod) != 0)
+		{
+			throw new CodegenException("Failed to link erased bitcode module for '" + erasedName + "'");
+		}
+	}
+
+	// ── Concrete vtable construction (call-site, consumer compilation) ─────────
+
+	/**
+	 * Returns a compile-time constant global containing the vtable for
+	 * {@code concreteType} implementing {@code bound}.
+	 *
+	 * <p>The vtable is a struct of {@code ptr} values, one per required method
+	 * in trait-declaration order.  Each slot points to a thin wrapper function
+	 * that boxes/unboxes the {@code ptr %self} argument and calls the concrete
+	 * implementation.</p>
+	 */
+	private LLVMValueRef getOrCreateConcreteVtable(TraitType bound, Type concreteType)
+	{
+		String vtableName = "__nebula_vtable_"
+				+ concreteType.name().replaceAll("[^a-zA-Z0-9]", "_")
+				+ "_" + bound.name();
+
+		LLVMValueRef existing = LLVMGetNamedGlobal(module, new BytePointer(vtableName));
+		if (existing != null && !existing.isNull())
+			return existing;
+
+		List<String> methodNames = bound.getVtableMethodNames();
+
+		LLVMValueRef[] slotFns = new LLVMValueRef[methodNames.size()];
+		for (int i = 0; i < methodNames.size(); i++)
+		{
+			String methodName = methodNames.get(i);
+			MethodSymbol concrete = resolveConcreteTraitMethod(bound, methodName, concreteType);
+			slotFns[i] = getOrEmitVtableWrapper(bound, methodName, concreteType, concrete);
+		}
+
+		// Build the constant initialiser in-context and derive the global type from it,
+		// guaranteeing that the element type and initializer type are identical.
+		LLVMValueRef vtableConst = LLVMConstStructInContext(
+				context, new PointerPointer<>(slotFns), slotFns.length, 0);
+		LLVMTypeRef vtableStructType = LLVMTypeOf(vtableConst);
+
+		LLVMValueRef global = LLVMAddGlobal(module, vtableStructType, new BytePointer(vtableName));
+		LLVMSetInitializer(global, vtableConst);
+		LLVMSetGlobalConstant(global, 1);
+		LLVMSetLinkage(global, LLVMPrivateLinkage);
+		return global;
+	}
+
+	/**
+	 * Resolves the concrete {@link MethodSymbol} for a given trait method on a
+	 * concrete type. Checks primitive impl scopes first, then composite member
+	 * scopes.
+	 */
+	private MethodSymbol resolveConcreteTraitMethod(TraitType bound, String methodName, Type concreteType)
+	{
+		MethodSymbol ms = null;
+
+		if (concreteType instanceof PrimitiveType pt)
+		{
+			SymbolTable primScope = analyzer.getPrimitiveImplScopes().get(pt);
+			if (primScope != null)
+			{
+				Symbol sym = primScope.resolveLocal(methodName);
+				if (sym instanceof MethodSymbol mSym)
+					ms = mSym;
+			}
+		}
+		else if (concreteType instanceof CompositeType ct)
+		{
+			Symbol sym = ct.getMemberScope().resolveLocal(methodName);
+			if (sym instanceof MethodSymbol mSym)
+				ms = mSym;
+		}
+
+		if (ms == null)
+			throw new CodegenException("Cannot find concrete implementation of '"
+					+ methodName + "' for type '" + concreteType.name()
+					+ "' satisfying trait '" + bound.name() + "'");
+		return ms;
+	}
+
+	/**
+	 * Emits (or returns the cached) wrapper function for a vtable slot.
+	 *
+	 * <p>The wrapper has signature {@code (ptr %self) -> RETURN_TYPE} and calls
+	 * the concrete implementation after loading {@code %self} with the concrete
+	 * LLVM type.  This boxing is eliminated by LLVM's inliner when the vtable
+	 * is a constant.</p>
+	 */
+	private LLVMValueRef getOrEmitVtableWrapper(
+			TraitType bound,
+			String methodName,
+			Type concreteType,
+			MethodSymbol concreteMs)
+	{
+		String wrapperName = "__nebula_vtwrap_"
+				+ concreteType.name().replaceAll("[^a-zA-Z0-9]", "_")
+				+ "_" + bound.name() + "_" + methodName;
+
+		LLVMValueRef existing = LLVMGetNamedFunction(module, new BytePointer(wrapperName));
+		if (existing != null && !existing.isNull())
+			return existing;
+
+		LLVMTypeRef ptrType    = LLVMPointerTypeInContext(context, 0);
+		MethodSymbol traitMethod = bound.getRequiredMethods().get(methodName);
+		Type         returnType  = traitMethod.getType().getReturnType();
+		LLVMTypeRef  retLlvmType = toLLVMType(returnType);
+
+		// Wrapper signature: (ptr %self) -> returnType
+		LLVMTypeRef[] wrapperParams = { ptrType };
+		LLVMTypeRef   wrapperFnType = LLVMFunctionType(
+				retLlvmType, new PointerPointer<>(wrapperParams), 1, 0);
+		LLVMValueRef  wrapperFn = LLVMAddFunction(module, new BytePointer(wrapperName), wrapperFnType);
+		LLVMSetLinkage(wrapperFn, LLVMPrivateLinkage);
+
+		// Save insertion point
+		LLVMBasicBlockRef savedBB = LLVMGetInsertBlock(builder);
+
+		LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(context, wrapperFn, new BytePointer("entry"));
+		LLVMPositionBuilderAtEnd(builder, entry);
+
+		LLVMValueRef selfPtr = LLVMGetParam(wrapperFn, 0);
+
+		// For composite types (structs / classes) the concrete method takes `ptr this`
+		// and selfPtr already points to the struct data stored in the erased arg box.
+		// For primitive types (including str) the concrete method takes the value
+		// directly, so we load it from selfPtr.
+		LLVMValueRef selfVal;
+		if (concreteType instanceof CompositeType)
+		{
+			selfVal = selfPtr; // pass the pointer to the struct data as `this`
+		}
+		else
+		{
+			LLVMTypeRef concreteLlvmType = toLLVMType(concreteType);
+			selfVal = LLVMBuildLoad2(builder, concreteLlvmType, selfPtr, new BytePointer("self_val"));
+		}
+
+		// Get / forward-declare the concrete function
+		String       concreteName   = concreteMs.getMangledName();
+		FunctionType concreteFnSem  = concreteMs.getType();
+		LLVMTypeRef  concreteFnType = toLLVMType(concreteFnSem);
+		LLVMValueRef concreteFn     = LLVMGetNamedFunction(module, new BytePointer(concreteName));
+		if (concreteFn == null || concreteFn.isNull())
+			concreteFn = LLVMAddFunction(module, new BytePointer(concreteName), concreteFnType);
+
+		// Build the call with the loaded value as the 'this' argument
+		LLVMValueRef[] callArgs = { selfVal };
+		String callResultName = returnType == PrimitiveType.VOID ? "" : "wrapper_result";
+		LLVMValueRef callResult = LLVMBuildCall2(
+				builder, concreteFnType, concreteFn,
+				new PointerPointer<>(callArgs), 1, callResultName);
+
+		if (returnType == PrimitiveType.VOID)
+			LLVMBuildRetVoid(builder);
+		else
+			LLVMBuildRet(builder, callResult);
+
+		// Restore insertion point
+		if (savedBB != null && !savedBB.isNull())
+			LLVMPositionBuilderAtEnd(builder, savedBB);
+
+		return wrapperFn;
 	}
 
 }

@@ -263,7 +263,17 @@ public final class LLVMTypeMapper
 
 	private static LLVMTypeRef mapFunction(LLVMContextRef ctx, FunctionType ft)
 	{
-		LLVMTypeRef returnType = map(ctx, ft.returnType);
+		// Structs are value types — return them by value (the actual LLVM struct type),
+		// not as an opaque pointer.  Classes remain pointer-based (heap allocated).
+		LLVMTypeRef returnType;
+		if (ft.returnType instanceof org.nebula.nebc.semantic.types.StructType stRet)
+		{
+			returnType = getOrCreateStructType(ctx, stRet);
+		}
+		else
+		{
+			returnType = map(ctx, ft.returnType);
+		}
 		int paramCount = ft.parameterTypes.size();
 		if (paramCount == 0)
 		{
