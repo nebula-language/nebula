@@ -59,6 +59,13 @@ public class SymbolExporter
 
     // ── Symbol table export ─────────────────────────────────────────────────────
 
+    /**
+     * Exports only the symbols that originated from the current compilation
+     * (i.e. were defined by user source files). Symbols imported from {@code .nebsym}
+     * files are always reconstructed with a {@code null} declaration node; we
+     * use that property to filter them out so that library outputs do not
+     * accumulate symbols from every transitively-loaded dependency.
+     */
     private JsonArray exportTable(SymbolTable table)
     {
         JsonArray array = new JsonArray();
@@ -67,6 +74,12 @@ public class SymbolExporter
             Symbol sym = entry.getValue();
             if (sym instanceof NamespaceSymbol ns)
             {
+                // Only export namespaces that were defined in user source.
+                // Imported namespaces (null declarationNode) are skipped entirely,
+                // which prevents std/library symbols from leaking into the output.
+                if (ns.getDeclarationNode() == null)
+                    continue;
+
                 JsonObject obj = new JsonObject();
                 obj.addProperty("kind", "namespace");
                 obj.addProperty("name", ns.getName());
@@ -75,19 +88,27 @@ public class SymbolExporter
             }
             else if (sym instanceof MethodSymbol ms)
             {
+                // Skip methods that were imported from external .nebsym files.
+                if (ms.getDeclarationNode() == null)
+                    continue;
+
                 array.add(exportMethod(ms));
             }
             else if (sym instanceof TypeSymbol ts)
             {
-                // Skip primitive types as they are built-in
-                if (!(ts.getType() instanceof PrimitiveType))
-                {
-                    array.add(exportType(ts));
-                }
+                // Skip primitive types as they are built-in and imported types.
+                if (ts.getType() instanceof PrimitiveType)
+                    continue;
+                if (ts.getDeclarationNode() == null)
+                    continue;
+
+                array.add(exportType(ts));
             }
             else if (sym instanceof VariableSymbol vs)
             {
-                // Don't export local variables, only global ones if they exist
+                // Don't export local variables; skip imported variables too.
+                if (vs.getDeclarationNode() == null)
+                    continue;
                 if (table.getParent() == null || table.getOwner() instanceof NamespaceSymbol)
                 {
                     array.add(exportVariable(vs));
@@ -239,17 +260,24 @@ public class SymbolExporter
             Type primType       = entry.getKey();
             SymbolTable scope   = entry.getValue();
 
-            JsonObject obj = new JsonObject();
-            obj.addProperty("type", primType.name());
-
             JsonArray methods = new JsonArray();
             for (Symbol sym : scope.getSymbols().values())
             {
                 if (sym instanceof MethodSymbol ms)
                 {
+                    // Skip methods imported from .nebsym files (null declarationNode).
+                    if (ms.getDeclarationNode() == null)
+                        continue;
                     methods.add(exportMethod(ms));
                 }
             }
+
+            // Only include the entry if there are user-defined methods to export.
+            if (methods.size() == 0)
+                continue;
+
+            JsonObject obj = new JsonObject();
+            obj.addProperty("type", primType.name());
             obj.add("methods", methods);
             array.add(obj);
         }

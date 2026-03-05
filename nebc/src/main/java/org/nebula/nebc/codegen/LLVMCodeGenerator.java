@@ -19,6 +19,7 @@ import org.nebula.nebc.semantic.symbol.TypeSymbol;
 import org.nebula.nebc.semantic.symbol.VariableSymbol;
 import org.nebula.nebc.semantic.SymbolTable;
 import org.nebula.nebc.semantic.types.*;
+import org.nebula.nebc.util.Log;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -1104,6 +1105,40 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		return null;
 	}
 
+	/**
+	 * Coerces an LLVM constant value to the target LLVM type.
+	 * <p>
+	 * Integer literal initializers for global constants may be inferred with a
+	 * wider type than the declared variable (e.g. {@code 0xFFFFFFFF} is
+	 * semantically {@code i64} because it exceeds {@link Integer#MAX_VALUE}, but
+	 * the declared type may be {@code u32} which maps to LLVM {@code i32}).
+	 * The raw bit-pattern is extracted via {@link LLVM#LLVMConstIntGetZExtValue}
+	 * and a fresh {@link LLVM#LLVMConstInt} is constructed with the target type,
+	 * which truncates from above or zero-extends from below as needed.
+	 *
+	 * @param value      The constant LLVM value to coerce (may be {@code null}).
+	 * @param targetType The required LLVM type.
+	 * @return The coerced constant, or the original value if no cast is needed.
+	 */
+	private LLVMValueRef coerceConstantToType(LLVMValueRef value, LLVMTypeRef targetType)
+	{
+		if (value == null)
+			return null;
+
+		LLVMTypeRef srcType = LLVMTypeOf(value);
+		if (LLVMGetTypeKind(srcType) == LLVMIntegerTypeKind
+			&& LLVMGetTypeKind(targetType) == LLVMIntegerTypeKind
+			&& LLVMGetIntTypeWidth(srcType) != LLVMGetIntTypeWidth(targetType))
+		{
+			// Extract the unsigned bit-pattern of the constant and re-create it
+			// with the target integer type.  LLVMConstInt uses the lower N bits
+			// of the supplied long, so this naturally truncates or zero-extends.
+			long rawBits = LLVMConstIntGetZExtValue(value);
+			return LLVMConstInt(targetType, rawBits, 0);
+		}
+		return value;
+	}
+
 	private Type resolveDeclaratorType(VariableDeclaration node)
 	{
 		org.nebula.nebc.semantic.symbol.Symbol sym = analyzer.getSymbol(node, org.nebula.nebc.semantic.symbol.VariableSymbol.class);
@@ -1122,9 +1157,8 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			{
 				String varName = decl.name();
 				Type type = resolveDeclaratorType(node.declaration);
-				System.out.println("Emitting global const " + varName + " of type " + type.name());
+				Log.debug("Emitting global const " + varName + " of type " + type.name());
 				LLVMTypeRef llvmType = toLLVMType(type);
-				System.out.println("LLVM type: " + llvmType.toString());
 				
 
 				LLVMValueRef globalVar = LLVMGetNamedGlobal(module, varName);
@@ -1139,6 +1173,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 					// For global consts the initializer must be a constant expression.
 					// Visiting a LiteralExpression in codegen always returns an LLVM constant.
 					initVal = decl.initializer().accept(this);
+
+					// Coerce the constant initializer to the declared global type.
+					// Integer literals whose value exceeds Integer.MAX_VALUE are inferred
+					// as i64 by the semantic analyser (e.g. 0xFFFFFFFF → i64), but the
+					// declared type may be u32 / i32, so we must truncate the constant.
+					initVal = coerceConstantToType(initVal, llvmType);
 				}
 
 				if (initVal == null)

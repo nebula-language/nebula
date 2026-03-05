@@ -412,6 +412,38 @@ public class Compiler
 				Log.err("Failed to load symbols from " + sf.path() + ": " + e.getMessage());
 			}
 		}
+
+		// Auto-load .nebsym companion files for every -l library found in -L search paths.
+		// e.g. `-l test -L .` will look for ./test.nebsym and load it for analysis.
+		for (SourceFile lib : config.nebLibraries())
+		{
+			String libName = lib.path();
+			boolean found = false;
+
+			for (java.io.File libDir : config.librarySearchPaths())
+			{
+				Path nebsym = libDir.toPath().resolve(libName + ".nebsym");
+				if (Files.exists(nebsym))
+				{
+					try
+					{
+						Log.info("Auto-loading symbols for library '" + libName + "': " + nebsym);
+						importer.importSymbols(nebsym.toString(), analyzer.getGlobalScope(), primImpls);
+					}
+					catch (IOException e)
+					{
+						Log.warn("Failed to auto-load symbols from " + nebsym + ": " + e.getMessage());
+					}
+					found = true;
+					break; // First match wins; don't load the same library twice.
+				}
+			}
+
+			if (!found)
+			{
+				Log.debug("No .nebsym found for library '" + libName + "' in library search paths.");
+			}
+		}
 	}
 
 	/**
