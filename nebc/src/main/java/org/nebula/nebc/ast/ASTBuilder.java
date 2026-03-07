@@ -173,22 +173,71 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	public ASTNode visitUse_statement(NebulaParser.Use_statementContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
-		String qualifiedName = ctx.qualified_name().getText();
-		String alias = null;
+		String basePath = ctx.qualified_name().getText();
 
-		if (ctx.use_tail() != null)
+		if (ctx.use_tail() == null)
 		{
-			if (ctx.use_tail().use_alias() != null)
-			{
-				alias = ctx.use_tail().use_alias().IDENTIFIER().getText();
-			}
-			else if (ctx.use_tail().IDENTIFIER() != null)
-			{
-				alias = ctx.use_tail().IDENTIFIER().getText();
-			}
+			// use foo;  — bare namespace import
+			return new UseStatement(span, basePath, (String) null);
 		}
 
-		return new UseStatement(span, qualifiedName, alias);
+		var tail = ctx.use_tail();
+
+		// use foo as bar;  — alias on the base path itself
+		if (tail.use_alias() != null && tail.use_selector() == null)
+		{
+			String alias = tail.use_alias().IDENTIFIER().getText();
+			return new UseStatement(span, basePath, alias);
+		}
+
+		// use foo:: ...
+		var selector = tail.use_selector();
+		if (selector == null)
+		{
+			return new UseStatement(span, basePath, (String) null);
+		}
+
+		// use foo::*
+		if (selector.STAR() != null)
+		{
+			return new UseStatement(span, basePath, true, Collections.emptyList());
+		}
+
+		// use foo::{a, b as c, *}
+		if (selector.OPEN_BRACE() != null)
+		{
+			List<UseStatement.UseItem> items = new ArrayList<>();
+			for (var itemCtx : selector.use_selector_item())
+			{
+				if (itemCtx.STAR() != null)
+				{
+					items.add(new UseStatement.UseItem("*", null, true));
+				}
+				else
+				{
+					String name = itemCtx.IDENTIFIER().getText();
+					String itemAlias = (itemCtx.use_alias() != null)
+						? itemCtx.use_alias().IDENTIFIER().getText()
+						: null;
+					items.add(new UseStatement.UseItem(name, itemAlias, false));
+				}
+			}
+			return new UseStatement(span, basePath, false, items);
+		}
+
+		// use foo::bar (as baz)?  — single item from selector
+		if (selector.IDENTIFIER() != null)
+		{
+			String itemName = selector.IDENTIFIER().getText();
+			String alias = (selector.use_alias() != null)
+				? selector.use_alias().IDENTIFIER().getText()
+				: null;
+			// Encode as single-item multi-import so the SA can import the specific symbol
+			List<UseStatement.UseItem> items = List.of(new UseStatement.UseItem(itemName, alias, false));
+			return new UseStatement(span, basePath, false, items);
+		}
+
+		return new UseStatement(span, basePath, (String) null);
 	}
 
 	@Override
@@ -1055,8 +1104,6 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 
 		if (ctx.literal() != null)
 		{
-			// Unwrap ASTNode to LiteralExpression if possible, literal() returns
-			// LiteralExpression
 			LiteralExpression lit = (LiteralExpression) visit(ctx.literal());
 			return new LiteralPattern(span, lit);
 		}
@@ -1064,17 +1111,13 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 		{
 			return new WildcardPattern(span);
 		}
-		if (ctx.IDENTIFIER() != null)
+		if (ctx.qualified_name() != null)
 		{
-			// Could be a variable binding or a type pattern.
-			// In simple grammar, "x" matches anything and binds to x.
-			// "String x" is a type pattern.
-			// Based on grammar, simple IDENTIFIER is likely a binding (Wildcard with name)
-			// But if it's a Type name, we need context. For now, treating as
-			// binding/TypePattern with null type?
-			// Or simpler: TypePattern with NamedType and null variable?
-			// Let's assume IDENTIFIER is a NamedType match for now (TypePattern).
-			TypeNode type = new NamedType(span, ctx.IDENTIFIER().getText(), Collections.emptyList());
+			// Covers both a bare identifier ("Normal") and a qualified variant ("Form::Normal").
+			// In either case, we represent it as a TypePattern wrapping a NamedType so that
+			// the codegen can look it up via the discriminant tables.
+			String name = ctx.qualified_name().getText();
+			TypeNode type = new NamedType(span, name, Collections.emptyList());
 			return new TypePattern(span, type, null);
 		}
 		if (ctx.tuple_pattern() != null)
@@ -1100,7 +1143,8 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	public ASTNode visitDestructuring_pattern(NebulaParser.Destructuring_patternContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
-		String variantName = ctx.IDENTIFIER().getText();
+		// Now uses qualified_name so variant can be written as Variant or Union::Variant
+		String variantName = ctx.qualified_name().getText();
 		List<String> bindings = new ArrayList<>();
 		for (var id : ctx.binding_list().IDENTIFIER())
 			bindings.add(id.getText());

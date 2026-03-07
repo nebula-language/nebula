@@ -4699,11 +4699,13 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		if (pat instanceof TypePattern tp)
 		{
 			// Enum member access — TypePattern wraps a NamedType whose qualifiedName is
-			// e.g. "Direction.North" or just "North" when matched against a Direction.
-			// We need to resolve this to a discriminant and compare tagVal.
-			String typeName = (tp.type instanceof org.nebula.nebc.ast.types.NamedType nt2)
+			// e.g. "Form::Normal" (new syntax) or "Form.Normal" / "Normal" (legacy).
+			// Normalise the AST double-colon separator to the dot used as the discriminant key.
+			String rawName = (tp.type instanceof org.nebula.nebc.ast.types.NamedType nt2)
 				? nt2.qualifiedName
 				: tp.type.getClass().getSimpleName();
+			// "Enum::Variant" → "Enum.Variant"
+			String typeName = rawName.replace("::", ".");
 			if (tagVal != null)
 			{
 				// Try qualified key first, then unqualified with union/enum prefix.
@@ -4712,9 +4714,11 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 					disc = unionDiscriminants.get(typeName);
 				if (disc == null && selectorType != null)
 				{
-					disc = enumDiscriminants.get(selectorType.name() + "." + typeName);
+					// Strip any qualifier already present then re-attach the selector type name
+					String simpleName = typeName.contains(".") ? typeName.substring(typeName.lastIndexOf('.') + 1) : typeName;
+					disc = enumDiscriminants.get(selectorType.name() + "." + simpleName);
 					if (disc == null)
-						disc = unionDiscriminants.get(selectorType.name() + "." + typeName);
+						disc = unionDiscriminants.get(selectorType.name() + "." + simpleName);
 				}
 				if (disc != null)
 				{
@@ -4731,12 +4735,16 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			// Union variant destructuring — compare the tag discriminant.
 			if (tagVal == null)
 				return null;
-			String key = (unionTypeName != null)
-				? unionTypeName + "." + dp.variantName
+			// Normalise "Union::Variant" → simple variant name for the key lookup.
+			String simpleVariant = dp.variantName.contains("::")
+				? dp.variantName.substring(dp.variantName.lastIndexOf("::") + 2)
 				: dp.variantName;
+			String key = (unionTypeName != null)
+				? unionTypeName + "." + simpleVariant
+				: simpleVariant;
 			Integer disc = unionDiscriminants.get(key);
 			if (disc == null)
-				disc = unionDiscriminants.get(dp.variantName);
+				disc = unionDiscriminants.get(simpleVariant);
 			if (disc == null)
 				return null;
 			LLVMValueRef discConst = LLVMConstInt(LLVMInt32TypeInContext(context), disc, 0);
@@ -4805,8 +4813,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		if (!(selectorType instanceof UnionType ut))
 			return bindings;
 
-		// Locate the variant's payload type via the union's member scope
-		String key = ut.name() + "." + dp.variantName;
+		// Locate the variant's payload type via the union's member scope.
+		// Normalise "Union::Variant" → "Variant" before building the dot key.
+		String simpleVariant = dp.variantName.contains("::")
+			? dp.variantName.substring(dp.variantName.lastIndexOf("::") + 2)
+			: dp.variantName;
+		String key = ut.name() + "." + simpleVariant;
 		Integer disc = unionDiscriminants.get(key);
 		if (disc == null)
 			return bindings;
@@ -4821,7 +4833,8 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		LLVMValueRef payloadGep = LLVMBuildStructGEP2(builder, unionStructType, unionAlloca, 1, "payload_gep");
 
 		// Resolve the variant's actual payload type from its constructor MethodSymbol.
-		Symbol variantSym = ut.getMemberScope().resolveLocal(dp.variantName);
+		// Use the simple (unqualified) variant name for the member scope lookup.
+		Symbol variantSym = ut.getMemberScope().resolveLocal(simpleVariant);
 		if (variantSym instanceof MethodSymbol ms)
 		{
 			FunctionType ft = ms.getType();

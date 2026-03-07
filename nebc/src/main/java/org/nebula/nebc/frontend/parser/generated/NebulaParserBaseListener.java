@@ -79,6 +79,30 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterUse_selector(NebulaParser.Use_selectorContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitUse_selector(NebulaParser.Use_selectorContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterUse_selector_item(NebulaParser.Use_selector_itemContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitUse_selector_item(NebulaParser.Use_selector_itemContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterUse_alias(NebulaParser.Use_aliasContext ctx) { }
 	/**
 	 * {@inheritDoc}

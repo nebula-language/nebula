@@ -43,6 +43,18 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitUse_tail(NebulaParser.Use_tailContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link NebulaParser#use_selector}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitUse_selector(NebulaParser.Use_selectorContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#use_selector_item}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitUse_selector_item(NebulaParser.Use_selector_itemContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link NebulaParser#use_alias}.
 	 * @param ctx the parse tree
 	 * @return the visitor result

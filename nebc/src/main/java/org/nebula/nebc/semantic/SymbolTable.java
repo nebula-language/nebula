@@ -114,7 +114,7 @@ public class SymbolTable
 	 */
 	private Symbol resolve(String name, boolean useParent)
 	{
-		// Handle qualified names: ns::User
+		// Handle qualified names: ns::User  or  Enum::Variant
 		if (name.contains("::"))
 		{
 			String[] parts = name.split("::", 2);
@@ -122,10 +122,14 @@ public class SymbolTable
 
 			if (prefix instanceof NamespaceSymbol ns)
 			{
-				// When resolving a qualified name, we only look inside that namespace.
-				// We don't want to walk up its parent chain if it's not found there,
-				// because that would be searching outside the qualified namespace.
+				// Namespace-qualified: only look inside that namespace.
 				return ns.getMemberTable().resolve(parts[1], false);
+			}
+			if (prefix instanceof TypeSymbol ts && ts.getType() instanceof org.nebula.nebc.semantic.types.CompositeType ct)
+			{
+				// Type-qualified: e.g. Enum::Variant, Union::Variant.
+				// Only search within the type's member scope, not its parent chain.
+				return ct.getMemberScope().resolve(parts[1], false);
 			}
 			return null;
 		}
@@ -251,5 +255,35 @@ public class SymbolTable
 		symbols.put(symbol.getName(), symbol);
 		symbol.setDefinedIn(this);
 		return true;
+	}
+
+	/**
+	 * Directly imports a single symbol into this scope under the given local name.
+	 * Does nothing if a symbol with that name is already defined locally.
+	 * Used to implement {@code use Enum::{Variant}} and alias imports.
+	 */
+	public void importSymbol(String localName, Symbol symbol)
+	{
+		if (!symbols.containsKey(localName))
+		{
+			symbols.put(localName, symbol);
+			symbol.setDefinedIn(this);
+		}
+	}
+
+	/**
+	 * Imports all symbols from {@code scope} into this scope (glob import).
+	 * Existing local symbols take precedence and are never overwritten.
+	 * Used to implement {@code use Enum::*}.
+	 */
+	public void importScope(SymbolTable scope)
+	{
+		for (Map.Entry<String, Symbol> entry : scope.getSymbols().entrySet())
+		{
+			if (!symbols.containsKey(entry.getKey()))
+			{
+				symbols.put(entry.getKey(), entry.getValue());
+			}
+		}
 	}
 }

@@ -40,7 +40,14 @@ public enum DiagnosticCode
 	TAG_AS_VALUE_TYPE("Tag '%s' cannot be used as a value type. Tags are compile-time-only constraints; use '<T: %s>' in a generic."),
 	TAG_IN_PARAM_POSITION("Parameter type is tag '%s'. Use the generic type parameter instead: '<T: %s>(T param)'."),
 	TAG_CYCLE("Circular tag definition detected: tag '%s' references itself (directly or indirectly)."),
-	TAG_IMPL_OVERLAP("Overlapping 'impl %s': type '%s' is already covered by a previous impl for this tag.");
+	TAG_IMPL_OVERLAP("Overlapping 'impl %s': type '%s' is already covered by a previous impl for this tag."),
+
+	// --- Match / Exhaustiveness ---
+	NON_EXHAUSTIVE_MATCH("Non-exhaustive match on type '%s'. Missing patterns: %s."),
+	UNKNOWN_VARIANT("'%s' is not a variant of '%s'."),
+
+	// --- Use ---
+	USE_ITEM_NOT_FOUND("'%s' is not a member of '%s'.");
 
 	private final String messageTemplate;
 

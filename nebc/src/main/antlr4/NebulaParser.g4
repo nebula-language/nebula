@@ -34,8 +34,19 @@ use_statement
     ;
 
 use_tail
-    : DOUBLE_COLON IDENTIFIER use_alias?
+    : DOUBLE_COLON use_selector
     | use_alias
+    ;
+
+use_selector
+    : STAR                                                                     // use foo::*
+    | IDENTIFIER use_alias?                                                    // use foo::bar (as baz)?
+    | OPEN_BRACE use_selector_item (COMMA use_selector_item)* COMMA? CLOSE_BRACE  // use foo::{a, b}
+    ;
+
+use_selector_item
+    : IDENTIFIER use_alias?
+    | STAR
     ;
 
 use_alias
@@ -220,13 +231,13 @@ pattern_atom
     : literal
     | UNDERSCORE
     | destructuring_pattern
-    | IDENTIFIER
+    | qualified_name
     | tuple_pattern
     | parenthesized_pattern
     ;
 
 destructuring_pattern
-    : IDENTIFIER OPEN_PARENS binding_list CLOSE_PARENS
+    : qualified_name OPEN_PARENS binding_list CLOSE_PARENS
     ;
 
 binding_list

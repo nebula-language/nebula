@@ -60,6 +60,26 @@ public interface NebulaParserListener extends ParseTreeListener {
 	 */
 	void exitUse_tail(NebulaParser.Use_tailContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link NebulaParser#use_selector}.
+	 * @param ctx the parse tree
+	 */
+	void enterUse_selector(NebulaParser.Use_selectorContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link NebulaParser#use_selector}.
+	 * @param ctx the parse tree
+	 */
+	void exitUse_selector(NebulaParser.Use_selectorContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link NebulaParser#use_selector_item}.
+	 * @param ctx the parse tree
+	 */
+	void enterUse_selector_item(NebulaParser.Use_selector_itemContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link NebulaParser#use_selector_item}.
+	 * @param ctx the parse tree
+	 */
+	void exitUse_selector_item(NebulaParser.Use_selector_itemContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link NebulaParser#use_alias}.
 	 * @param ctx the parse tree
 	 */

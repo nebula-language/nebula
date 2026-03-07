@@ -23,8 +23,10 @@ import org.nebula.nebc.semantic.types.*;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class SemanticAnalyzer implements ASTVisitor<Type>
 {
@@ -2559,7 +2561,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				if (!dp.bindings.isEmpty() && matchedType instanceof CompositeType ct)
 				{
 					SymbolTable memberScope = ct.getMemberScope();
-					Symbol variantSym = memberScope.resolve(dp.variantName);
+					Symbol variantSym = memberScope.resolve(variantSimpleName(dp.variantName));
 					if (variantSym instanceof MethodSymbol ms)
 					{
 						// FunctionType(unionType, [payloadType]) — skip the first 'this'-like param
@@ -2602,9 +2604,339 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			}
 		}
 
+		// Exhaustiveness check: only for finite types (enums, unions, tuples of those)
+		checkMatchExhaustiveness(node, matchedType);
+
 		Type result = commonType != null ? commonType : Type.ANY;
 		recordType(node, result);
 		return result;
+	}
+
+	// =========================================================================
+	// Match exhaustiveness helpers
+	// =========================================================================
+
+	/**
+	 * Strips a qualified variant name down to just the simple variant identifier.
+	 * E.g. {@code "Form::Normal"} → {@code "Normal"}, {@code "Normal"} → {@code "Normal"}.
+	 */
+	private static String variantSimpleName(String name)
+	{
+		int sep = name.lastIndexOf("::");
+		return sep >= 0 ? name.substring(sep + 2) : name;
+	}
+
+	/**
+	 * Checks that the match expression covers all possible values of the selector
+	 * type. Emits {@link DiagnosticCode#NON_EXHAUSTIVE_MATCH} when patterns are
+	 * missing. Only checks finite types (enums, unions, and tuples thereof).
+	 */
+	private void checkMatchExhaustiveness(MatchExpression node, Type selectorType)
+	{
+		if (selectorType == null || selectorType == Type.ANY || selectorType == Type.ERROR)
+			return;
+
+		if (selectorType instanceof EnumType et)
+		{
+			checkFiniteTypeExhaustiveness(node, et, getAllEnumVariants(et));
+		}
+		else if (selectorType instanceof UnionType ut)
+		{
+			checkFiniteTypeExhaustiveness(node, ut, getAllUnionVariants(ut));
+		}
+		else if (selectorType instanceof TupleType tt)
+		{
+			checkTupleExhaustiveness(node, tt);
+		}
+	}
+
+	/**
+	 * Returns all variant names declared in an {@link EnumType}.
+	 * Only {@link VariableSymbol} entries whose declaration node is an
+	 * {@link EnumDeclaration} are included — this precisely identifies enum
+	 * variants and excludes synthetic {@code this} parameters from methods.
+	 */
+	private Set<String> getAllEnumVariants(EnumType et)
+	{
+		Set<String> result = new LinkedHashSet<>();
+		for (Map.Entry<String, Symbol> entry : et.getMemberScope().getSymbols().entrySet())
+		{
+			Symbol sym = entry.getValue();
+			if (sym instanceof VariableSymbol vs
+					&& vs.getDeclarationNode() instanceof EnumDeclaration)
+				result.add(entry.getKey());
+		}
+		return result;
+	}
+
+	/**
+	 * Returns all variant names declared in a {@link UnionType}.
+	 * No-payload variants are {@link VariableSymbol}s declared by a
+	 * {@link UnionDeclaration}; payload variants are {@link MethodSymbol}s with
+	 * the same declaration node. Both are included; {@code this} and other
+	 * injected symbols are excluded.
+	 */
+	private Set<String> getAllUnionVariants(UnionType ut)
+	{
+		Set<String> result = new LinkedHashSet<>();
+		for (Map.Entry<String, Symbol> entry : ut.getMemberScope().getSymbols().entrySet())
+		{
+			Symbol sym = entry.getValue();
+			if (sym.getDeclarationNode() instanceof UnionDeclaration)
+				result.add(entry.getKey());
+		}
+		return result;
+	}
+
+	/**
+	 * Checks exhaustiveness for a single-dimension finite type (enum or union).
+	 *
+	 * @param node        the match expression (used for error reporting)
+	 * @param type        the selector type
+	 * @param allVariants the complete set of variant names for that type
+	 */
+	private void checkFiniteTypeExhaustiveness(
+			MatchExpression node, CompositeType type, Set<String> allVariants)
+	{
+		Set<String> uncovered = new LinkedHashSet<>(allVariants);
+
+		for (MatchArm arm : node.arms)
+		{
+			if (isWildcardArm(arm.pattern))
+				return; // Wildcard covers everything
+
+			Set<String> armCovered = collectSingleDimCovered(arm.pattern, type, allVariants);
+			if (armCovered == null)
+				return; // Wildcard inside arm — exhaustive
+			uncovered.removeAll(armCovered);
+			if (uncovered.isEmpty())
+				return; // All covered
+		}
+
+		if (!uncovered.isEmpty())
+		{
+			error(DiagnosticCode.NON_EXHAUSTIVE_MATCH, node,
+				type.name(),
+				String.join(", ", uncovered));
+		}
+	}
+
+	/**
+	 * Checks exhaustiveness for a tuple selector whose element types are all
+	 * finite (enum or union). Computes the Cartesian product and subtracts each
+	 * arm's covered tuples.
+	 */
+	private void checkTupleExhaustiveness(MatchExpression node, TupleType tt)
+	{
+		// Build the list of variants per dimension
+		List<List<String>> dimensions = new ArrayList<>();
+		for (Type elemType : tt.elementTypes)
+		{
+			List<String> variants = getVariantsForType(elemType);
+			if (variants == null)
+				return; // Not a finite type — skip check
+			dimensions.add(variants);
+		}
+
+		// Guard against combinatorial explosion
+		int total = dimensions.stream().mapToInt(List::size).reduce(1, (a, b) -> a * b);
+		if (total > 512)
+			return;
+
+		// Start with the full Cartesian product as uncovered
+		Set<String> uncovered = new LinkedHashSet<>();
+		buildCartesianProduct(dimensions, 0, new ArrayList<>(), uncovered);
+
+		for (MatchArm arm : node.arms)
+		{
+			if (isWildcardArm(arm.pattern))
+				return; // Wildcard covers everything
+
+			if (!(arm.pattern instanceof TuplePattern tp))
+				continue;
+
+			Set<String> armCovered = computeTupleCoverage(tp, dimensions, tt.elementTypes);
+			if (armCovered == null)
+				return; // Contains wildcard — exhaustive
+			uncovered.removeAll(armCovered);
+			if (uncovered.isEmpty())
+				return;
+		}
+
+		if (!uncovered.isEmpty())
+		{
+			String missing = uncovered.stream()
+				.limit(5)
+				.map(s -> "(" + s + ")")
+				.collect(java.util.stream.Collectors.joining(", "));
+			if (uncovered.size() > 5)
+				missing += ", ...";
+			error(DiagnosticCode.NON_EXHAUSTIVE_MATCH, node, tt.name(), missing);
+		}
+	}
+
+	/**
+	 * Returns the full list of variant names for a type, or {@code null} if the
+	 * type is not a finite (enum/union) type.
+	 */
+	private List<String> getVariantsForType(Type type)
+	{
+		if (type instanceof EnumType et)
+			return new ArrayList<>(getAllEnumVariants(et));
+		if (type instanceof UnionType ut)
+			return new ArrayList<>(getAllUnionVariants(ut));
+		return null;
+	}
+
+	/**
+	 * Determines which single-dimension variants are covered by {@code pat},
+	 * given the expected {@code type}.
+	 *
+	 * @return the set of covered variant names, or {@code null} if {@code pat}
+	 *         contains a wildcard (meaning all variants are covered).
+	 */
+	private Set<String> collectSingleDimCovered(Pattern pat, CompositeType type, Set<String> allVariants)
+	{
+		if (isWildcardArm(pat))
+			return null;
+
+		if (pat instanceof TypePattern tp && tp.type instanceof NamedType nt)
+		{
+			String variantName = resolvePatternVariantSimpleName(nt.qualifiedName, type);
+			if (variantName != null)
+			{
+				Set<String> result = new LinkedHashSet<>();
+				result.add(variantName);
+				return result;
+			}
+		}
+
+		if (pat instanceof DestructuringPattern dp)
+		{
+			String variantName = variantSimpleName(dp.variantName);
+			if (type.getMemberScope().resolveLocal(variantName) != null)
+			{
+				Set<String> result = new LinkedHashSet<>();
+				result.add(variantName);
+				return result;
+			}
+		}
+
+		if (pat instanceof OrPattern op)
+		{
+			Set<String> result = new LinkedHashSet<>();
+			for (Pattern alt : op.alternatives)
+			{
+				Set<String> altCovered = collectSingleDimCovered(alt, type, allVariants);
+				if (altCovered == null)
+					return null; // One alt is wildcard — covers all
+				result.addAll(altCovered);
+			}
+			return result;
+		}
+
+		return new LinkedHashSet<>();
+	}
+
+	/**
+	 * Resolves a pattern name (possibly qualified, e.g. {@code "Form::Normal"})
+	 * to the simple variant name within {@code type}, or {@code null} if it does
+	 * not belong to that type.
+	 */
+	private String resolvePatternVariantSimpleName(String patternName, CompositeType type)
+	{
+		if (patternName.contains("::"))
+		{
+			int sep = patternName.lastIndexOf("::");
+			String prefix = patternName.substring(0, sep);
+			String simpleName = patternName.substring(sep + 2);
+			// If the prefix doesn't match this type, it's for a different type
+			if (!prefix.equals(type.name()))
+				return null;
+			return type.getMemberScope().resolveLocal(simpleName) != null ? simpleName : null;
+		}
+		// Unqualified: verify it's a member of this type
+		return type.getMemberScope().resolveLocal(patternName) != null ? patternName : null;
+	}
+
+	/**
+	 * Computes the set of tuple-combos covered by a {@link TuplePattern}.
+	 * Each combo is represented as a comma-joined string of variant names.
+	 *
+	 * @return the covered set, or {@code null} if the tuple pattern contains a
+	 *         wildcard that covers all combos.
+	 */
+	private Set<String> computeTupleCoverage(
+			TuplePattern tp,
+			List<List<String>> allDimensions,
+			List<Type> elementTypes)
+	{
+		// For each position, determine the set of variants covered by the sub-pattern.
+		List<List<String>> perDimCovered = new ArrayList<>();
+		for (int i = 0; i < tp.elements.size() && i < allDimensions.size(); i++)
+		{
+			Pattern subPat = tp.elements.get(i);
+			Type elemType = (i < elementTypes.size()) ? elementTypes.get(i) : null;
+			CompositeType compositeElem = (elemType instanceof CompositeType ct) ? ct : null;
+
+			if (isWildcardArm(subPat))
+			{
+				// Wildcard in this dimension: covers ALL variants for that dimension
+				perDimCovered.add(new ArrayList<>(allDimensions.get(i)));
+			}
+			else if (compositeElem != null)
+			{
+				Set<String> dimCovered = collectSingleDimCovered(subPat, compositeElem, new LinkedHashSet<>(allDimensions.get(i)));
+				if (dimCovered == null)
+				{
+					// Wildcard found inside an or-pattern chain — covers all
+					perDimCovered.add(new ArrayList<>(allDimensions.get(i)));
+				}
+				else
+				{
+					perDimCovered.add(new ArrayList<>(dimCovered));
+				}
+			}
+			else
+			{
+				// Can't determine coverage for this dimension
+				perDimCovered.add(new ArrayList<>(allDimensions.get(i)));
+			}
+		}
+
+		// Compute Cartesian product of the covered sets
+		Set<String> result = new LinkedHashSet<>();
+		buildCartesianProduct(perDimCovered, 0, new ArrayList<>(), result);
+		return result;
+	}
+
+	/** Returns {@code true} if the pattern is unconditionally a wildcard. */
+	private boolean isWildcardArm(Pattern pat)
+	{
+		return pat instanceof WildcardPattern;
+	}
+
+	/**
+	 * Recursively builds the Cartesian product of {@code dimensions} and adds
+	 * each combination (comma-joined variant names) to {@code result}.
+	 */
+	private void buildCartesianProduct(
+			List<List<String>> dimensions,
+			int dim,
+			List<String> current,
+			Set<String> result)
+	{
+		if (dim == dimensions.size())
+		{
+			result.add(String.join(", ", current));
+			return;
+		}
+		for (String variant : dimensions.get(dim))
+		{
+			current.add(variant);
+			buildCartesianProduct(dimensions, dim + 1, current, result);
+			current.remove(current.size() - 1);
+		}
 	}
 
 	@Override
@@ -3242,20 +3574,128 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	@Override
 	public Type visitUseStatement(UseStatement node)
 	{
-		// Resolve the namespace — check current scope chain first, then global scope
+		// ----------------------------------------------------------------
+		// Glob import: use foo::*
+		// ----------------------------------------------------------------
+		if (node.isGlob)
+		{
+			importGlobFrom(node, node.qualifiedName);
+			return null;
+		}
+
+		// ----------------------------------------------------------------
+		// Multi-item import: use foo::{a, b as c}
+		// ----------------------------------------------------------------
+		if (node.items != null)
+		{
+			for (UseStatement.UseItem item : node.items)
+			{
+				if (item.isGlob())
+				{
+					importGlobFrom(node, node.qualifiedName);
+				}
+				else
+				{
+					importSingleItem(node, node.qualifiedName, item.name(), item.alias());
+				}
+			}
+			return null;
+		}
+
+		// ----------------------------------------------------------------
+		// Simple namespace import (legacy): use foo;  or  use foo as bar;
+		// ----------------------------------------------------------------
 		Symbol sym = currentScope.resolve(node.qualifiedName);
 		if (sym == null)
 			sym = globalScope.resolve(node.qualifiedName);
+
 		if (sym instanceof NamespaceSymbol ns)
 		{
-			currentScope.addImport(ns);
+			if (node.alias != null)
+			{
+				// Alias: register the namespace under the alias name
+				currentScope.importSymbol(node.alias, ns);
+			}
+			else
+			{
+				currentScope.addImport(ns);
+			}
+		}
+		else if (sym instanceof TypeSymbol ts)
+		{
+			// Direct type import (e.g. use MyEnum;): allow using variant names unqualified
+			String localName = (node.alias != null) ? node.alias : ts.getName();
+			currentScope.importSymbol(localName, ts);
+		}
+		else if (sym != null)
+		{
+			String localName = (node.alias != null) ? node.alias : sym.getName();
+			currentScope.importSymbol(localName, sym);
 		}
 		else
 		{
-			// If it's a direct import of a type, we might want to support that too, 
-			// but for now we follow the 'use' is for namespaces/traits rule.
 			error(DiagnosticCode.UNDEFINED_SYMBOL, node, node.qualifiedName);
 		}
+		return null;
+	}
+
+	/**
+	 * Resolves the base path and imports all of its members into the current scope.
+	 * Supports namespaces, enums, and unions as the base type.
+	 */
+	private void importGlobFrom(UseStatement node, String basePath)
+	{
+		SymbolTable memberScope = resolveMemberScope(node, basePath);
+		if (memberScope != null)
+			currentScope.importScope(memberScope);
+	}
+
+	/**
+	 * Resolves {@code basePath} and imports a single named item from it into the
+	 * current scope, optionally under {@code alias}.
+	 */
+	private void importSingleItem(UseStatement node, String basePath, String itemName, String alias)
+	{
+		SymbolTable memberScope = resolveMemberScope(node, basePath);
+		if (memberScope == null)
+			return;
+
+		Symbol target = memberScope.resolveLocal(itemName);
+		if (target == null)
+			target = memberScope.resolve(itemName);
+
+		if (target == null)
+		{
+			error(DiagnosticCode.USE_ITEM_NOT_FOUND, node, itemName, basePath);
+			return;
+		}
+
+		String localName = (alias != null) ? alias : itemName;
+		currentScope.importSymbol(localName, target);
+	}
+
+	/**
+	 * Resolves {@code path} to a scope that can be glob-imported or item-imported.
+	 * Accepts namespaces, enums, unions, and classes/structs.
+	 * Returns {@code null} and emits an error if the path cannot be resolved.
+	 */
+	private SymbolTable resolveMemberScope(UseStatement node, String path)
+	{
+		Symbol sym = currentScope.resolve(path);
+		if (sym == null)
+			sym = globalScope.resolve(path);
+
+		if (sym instanceof NamespaceSymbol ns)
+			return ns.getMemberTable();
+
+		if (sym instanceof TypeSymbol ts && ts.getType() instanceof CompositeType ct)
+			return ct.getMemberScope();
+
+		if (sym == null)
+			error(DiagnosticCode.UNDEFINED_SYMBOL, node, path);
+		else
+			error(DiagnosticCode.UNDEFINED_SYMBOL, node, path + " (not a namespace or type)");
+
 		return null;
 	}
 
