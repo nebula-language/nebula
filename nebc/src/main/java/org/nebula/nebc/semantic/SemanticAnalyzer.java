@@ -92,6 +92,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					error(DiagnosticCode.TYPE_ALREADY_DEFINED, cd, cd.name);
 				}
+				if (!cd.attributes.isEmpty())
+					sym.setAttributes(collectAttributeInfos(cd.attributes));
 			}
 			else if (decl instanceof StructDeclaration sd)
 			{
@@ -102,6 +104,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					error(DiagnosticCode.TYPE_ALREADY_DEFINED, sd, sd.name);
 				}
+				if (!sd.attributes.isEmpty())
+					sym.setAttributes(collectAttributeInfos(sd.attributes));
 			}
 			else if (decl instanceof EnumDeclaration ed)
 			{
@@ -111,6 +115,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					error(DiagnosticCode.TYPE_ALREADY_DEFINED, ed, ed.name);
 				}
+				if (!ed.attributes.isEmpty())
+					sym.setAttributes(collectAttributeInfos(ed.attributes));
 				// Pre-register variants in Phase 1 so unqualified variant names
 				// (e.g. Mushroom instead of Colletable.Mushroom) are resolvable
 				// in any method body regardless of source declaration order.
@@ -128,6 +134,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					error(DiagnosticCode.TYPE_ALREADY_DEFINED, ud, ud.name);
 				}
+				if (!ud.attributes.isEmpty())
+					sym.setAttributes(collectAttributeInfos(ud.attributes));
 			}
 			else if (decl instanceof TraitDeclaration td)
 			{
@@ -137,6 +145,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					error(DiagnosticCode.TYPE_ALREADY_DEFINED, td, td.name);
 				}
+				if (!td.attributes.isEmpty())
+					sym.setAttributes(collectAttributeInfos(td.attributes));
 			}
 			else if (decl instanceof TagStatement ts)
 			{
@@ -1234,6 +1244,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 
 		// 2. Define method in the OUTER scope (not the type-param scope)
 		MethodSymbol methodSym = new MethodSymbol(node.name, methodType, node.modifiers, isInsideExtern || node.isExtern, node, typeParams);
+		if (!node.attributes.isEmpty())
+			methodSym.setAttributes(collectAttributeInfos(node.attributes));
 		recordSymbol(node, methodSym);
 		SymbolTable defineIn = (outerScope != null) ? outerScope : currentScope;
 		if (!defineIn.forceDefine(methodSym))
@@ -3801,5 +3813,37 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			error(DiagnosticCode.INVALID_BREAK_OUTSIDE_LOOP, node, "continue");
 		}
 		return null;
+	}
+
+	// =========================================================================
+	// Attributes
+	// =========================================================================
+
+	/**
+	 * Converts a list of {@link org.nebula.nebc.ast.declarations.AttributeNode}s
+	 * from the AST into the simplified {@link Symbol.AttributeInfo} representation
+	 * stored on symbols.
+	 *
+	 * <p>Argument expressions are serialised to their AST-printer text so that
+	 * consumers of the {@code std::attributes} API can inspect them without
+	 * needing access to the original parse tree.</p>
+	 */
+	private List<Symbol.AttributeInfo> collectAttributeInfos(
+		List<org.nebula.nebc.ast.declarations.AttributeNode> nodes)
+	{
+		if (nodes == null || nodes.isEmpty())
+			return java.util.Collections.emptyList();
+
+		List<Symbol.AttributeInfo> result = new ArrayList<>();
+		for (var attr : nodes)
+		{
+			List<String> argTexts = new ArrayList<>();
+			for (var arg : attr.args)
+			{
+				argTexts.add(org.nebula.nebc.ast.util.ASTPrinter.print(arg).trim());
+			}
+			result.add(new Symbol.AttributeInfo(attr.path, argTexts));
+		}
+		return result;
 	}
 }

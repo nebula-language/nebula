@@ -460,6 +460,26 @@ public interface NebulaParserListener extends ParseTreeListener {
 	 */
 	void exitParenthesized_pattern(NebulaParser.Parenthesized_patternContext ctx);
 	/**
+	 * Enter a parse tree produced by {@link NebulaParser#attribute}.
+	 * @param ctx the parse tree
+	 */
+	void enterAttribute(NebulaParser.AttributeContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link NebulaParser#attribute}.
+	 * @param ctx the parse tree
+	 */
+	void exitAttribute(NebulaParser.AttributeContext ctx);
+	/**
+	 * Enter a parse tree produced by {@link NebulaParser#attribute_path}.
+	 * @param ctx the parse tree
+	 */
+	void enterAttribute_path(NebulaParser.Attribute_pathContext ctx);
+	/**
+	 * Exit a parse tree produced by {@link NebulaParser#attribute_path}.
+	 * @param ctx the parse tree
+	 */
+	void exitAttribute_path(NebulaParser.Attribute_pathContext ctx);
+	/**
 	 * Enter a parse tree produced by {@link NebulaParser#const_declaration}.
 	 * @param ctx the parse tree
 	 */

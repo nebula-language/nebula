@@ -2,8 +2,7 @@ package org.nebula.nebc.ast;
 
 import org.nebula.nebc.ast.declarations.*;
 import org.nebula.nebc.ast.expressions.*;
-import org.nebula.nebc.ast.expressions.LiteralExpression.LiteralType;
-import org.nebula.nebc.ast.patterns.*;
+import org.nebula.nebc.ast.expressions.LiteralExpression.LiteralType;import org.nebula.nebc.ast.patterns.*;
 import org.nebula.nebc.ast.statements.*;
 import org.nebula.nebc.ast.tags.TagAtom;
 import org.nebula.nebc.ast.tags.TagExpression;
@@ -276,6 +275,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	public ASTNode visitClass_declaration(NebulaParser.Class_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		String name = ctx.IDENTIFIER().getText();
 
 		List<GenericParam> typeParams = buildTypeParams(ctx.type_parameters());
@@ -295,13 +295,14 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			members.add((Declaration) visit(memberCtx.getChild(0)));
 		}
 
-		return new ClassDeclaration(span, name, typeParams, inheritance, members);
+		return new ClassDeclaration(span, name, typeParams, inheritance, members, attrs);
 	}
 
 	@Override
 	public ASTNode visitStruct_declaration(NebulaParser.Struct_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		String name = ctx.IDENTIFIER().getText();
 
 		List<GenericParam> typeParams = buildTypeParams(ctx.type_parameters());
@@ -321,13 +322,14 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			members.add((Declaration) visit(memberCtx.getChild(0)));
 		}
 
-		return new StructDeclaration(span, name, typeParams, inheritance, members);
+		return new StructDeclaration(span, name, typeParams, inheritance, members, attrs);
 	}
 
 	@Override
 	public ASTNode visitEnum_declaration(NebulaParser.Enum_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		String name = ctx.IDENTIFIER().getText();
 
 		List<String> variants = new ArrayList<>();
@@ -339,13 +341,14 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			}
 		}
 
-		return new EnumDeclaration(span, name, variants);
+		return new EnumDeclaration(span, name, variants, attrs);
 	}
 
 	@Override
 	public ASTNode visitTrait_declaration(NebulaParser.Trait_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		String name = ctx.IDENTIFIER().getText();
 		List<GenericParam> typeParams = Collections.emptyList(); // grammar: trait has no type_parameters
 		List<MethodDeclaration> members = new ArrayList<>();
@@ -363,13 +366,14 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			members.add((MethodDeclaration) visit(ctx.trait_body().method_declaration()));
 		}
 
-		return new TraitDeclaration(span, name, typeParams, members);
+		return new TraitDeclaration(span, name, typeParams, members, attrs);
 	}
 
 	@Override
 	public ASTNode visitImpl_declaration(NebulaParser.Impl_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 
 		// The first type() is the trait being implemented
 		TypeNode traitType = (TypeNode) visit(ctx.type(0));
@@ -388,7 +392,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 				}
 			}
 
-			impls.add(new ImplDeclaration(span, traitType, targetType, members));
+			impls.add(new ImplDeclaration(span, traitType, targetType, members, attrs));
 		}
 
 		if (impls.size() == 1)
@@ -402,6 +406,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	public ASTNode visitUnion_declaration(NebulaParser.Union_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		String name = ctx.IDENTIFIER().getText();
 
 		List<UnionVariant> variants = new ArrayList<>();
@@ -419,13 +424,14 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			}
 		}
 
-		return new UnionDeclaration(span, name, variants);
+		return new UnionDeclaration(span, name, variants, attrs);
 	}
 
 	@Override
 	public ASTNode visitMethod_declaration(NebulaParser.Method_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		List<Modifier> modifiers = getModifiers(ctx.modifiers());
 
 		TypeNode returnType = null;
@@ -440,29 +446,31 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 
 		ASTNode body = getMethodBody(ctx.method_body());
 
-		return new MethodDeclaration(span, false, modifiers, returnType, name, typeParams, parameters, body);
+		return new MethodDeclaration(span, false, modifiers, returnType, name, typeParams, parameters, body, attrs);
 	}
 
 	@Override
 	public ASTNode visitConstructor_declaration(NebulaParser.Constructor_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		String name = ctx.IDENTIFIER().getText();
 		List<Parameter> parameters = getParameters(ctx.parameters());
 		StatementBlock body = (StatementBlock) visit(ctx.statement_block());
 
-		return new ConstructorDeclaration(span, name, parameters, body);
+		return new ConstructorDeclaration(span, name, parameters, body, attrs);
 	}
 
 	@Override
 	public ASTNode visitOperator_declaration(NebulaParser.Operator_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		String operatorToken = ctx.overloadable_operator().getText();
 		List<Parameter> parameters = getParameters(ctx.parameters());
 		ASTNode body = getMethodBody(ctx.method_body());
 
-		return new OperatorDeclaration(span, operatorToken, parameters, body);
+		return new OperatorDeclaration(span, operatorToken, parameters, body, attrs);
 	}
 
 	@Override
@@ -476,19 +484,21 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	public ASTNode visitField_declaration(NebulaParser.Field_declarationContext ctx)
 	{
 		// Field declarations delegate to variable_declaration, preserving backlink flag
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		var inner = ctx.variable_declaration();
 		boolean isBacklink = inner.backlink_modifier() != null;
-		return buildVariableDeclaration(ctx, inner.modifiers(), inner.VAR() != null, inner.type(), inner.variable_declarators(), isBacklink);
+		return buildVariableDeclaration(ctx, inner.modifiers(), inner.VAR() != null, inner.type(), inner.variable_declarators(), isBacklink, attrs);
 	}
 
 	@Override
 	public ASTNode visitConst_declaration(NebulaParser.Const_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		var inner = ctx.variable_declaration();
 		boolean isBacklink = inner.backlink_modifier() != null;
 		VariableDeclaration varDecl = buildVariableDeclaration(inner, inner.modifiers(), inner.VAR() != null, inner.type(), inner.variable_declarators(), isBacklink);
-		return new ConstDeclaration(span, varDecl);
+		return new ConstDeclaration(span, varDecl, attrs);
 	}
 
 	private VariableDeclaration buildVariableDeclaration(
@@ -498,6 +508,18 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 		NebulaParser.TypeContext typeCtx,
 		NebulaParser.Variable_declaratorsContext declsCtx,
 		boolean isBacklink)
+	{
+		return buildVariableDeclaration(ctx, modCtx, isVar, typeCtx, declsCtx, isBacklink, Collections.emptyList());
+	}
+
+	private VariableDeclaration buildVariableDeclaration(
+		org.antlr.v4.runtime.ParserRuleContext ctx,
+		NebulaParser.ModifiersContext modCtx,
+		boolean isVar,
+		NebulaParser.TypeContext typeCtx,
+		NebulaParser.Variable_declaratorsContext declsCtx,
+		boolean isBacklink,
+		List<AttributeNode> attributes)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
 
@@ -515,7 +537,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			declarators.add(new VariableDeclarator(name, init));
 		}
 
-		return new VariableDeclaration(span, type, declarators, isVar, isBacklink);
+		return new VariableDeclaration(span, type, declarators, isVar, isBacklink, attributes);
 	}
 
 	// =========================================================================
@@ -1517,6 +1539,40 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 		if (ctx.namedArgument() != null)
 			return (Expression) visit(ctx.namedArgument().expression());
 		return (Expression) visit(ctx.positionalArgument().nonAssignmentExpression());
+	}
+
+	/**
+	 * Converts a list of {@code attribute} parse-tree contexts into
+	 * {@link AttributeNode} AST nodes.
+	 *
+	 * <p>Each attribute carries its qualified path (e.g. {@code "test"} or
+	 * {@code "std::derive"}) and the argument expressions passed inside the
+	 * optional parentheses.</p>
+	 */
+	private List<AttributeNode> buildAttributes(List<NebulaParser.AttributeContext> ctxList)
+	{
+		if (ctxList == null || ctxList.isEmpty())
+			return Collections.emptyList();
+
+		List<AttributeNode> attrs = new ArrayList<>();
+		for (NebulaParser.AttributeContext attrCtx : ctxList)
+		{
+			SourceSpan span = SourceUtil.createSpan(attrCtx, currentFileName);
+			String path = attrCtx.attribute_path().getText();
+
+			List<ASTNode> args = new ArrayList<>();
+			if (attrCtx.arguments() != null
+				&& attrCtx.arguments().argument_list() != null)
+			{
+				for (var argCtx : attrCtx.arguments().argument_list().argument())
+				{
+					args.add(extractArgument(argCtx));
+				}
+			}
+
+			attrs.add(new AttributeNode(span, path, args));
+		}
+		return attrs;
 	}
 
 	private ASTNode getMethodBody(NebulaParser.Method_bodyContext ctx)

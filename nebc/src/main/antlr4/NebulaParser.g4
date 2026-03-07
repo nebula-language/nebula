@@ -90,7 +90,7 @@ qualified_name
     ;
 
 enum_declaration
-    : ENUM IDENTIFIER enum_block
+    : attribute* ENUM IDENTIFIER enum_block
     ;
 
 enum_block
@@ -255,8 +255,29 @@ parenthesized_pattern
 //=============================================================================
 // Member Declarations
 //=============================================================================
+
+// -----------------------------------------------------------------------------
+// Attributes
+// -----------------------------------------------------------------------------
+
+/**
+ * A compile-time attribute annotation attached to a declaration.
+ * Syntax: #[path] or #[path(args)]
+ * Examples: #[test], #[doc("Hello")], #[std::derive(Eq, Hash)]
+ */
+attribute
+    : HASH OPEN_BRACKET attribute_path arguments? CLOSE_BRACKET
+    ;
+
+attribute_path
+    : IDENTIFIER (DOUBLE_COLON IDENTIFIER)*
+    ;
+
+// -----------------------------------------------------------------------------
+// Constants & Variables
+// -----------------------------------------------------------------------------
 const_declaration
-    : CONST variable_declaration
+    : attribute* CONST variable_declaration
     ;
 
 variable_declaration
@@ -284,7 +305,7 @@ modifiers
     ;
 
 field_declaration
-    :  variable_declaration
+    : attribute* variable_declaration
     ;
 
 variable_declarators
@@ -296,11 +317,11 @@ variable_declarator
     ;
 
 method_declaration
-    : modifiers return_type IDENTIFIER type_parameters? parameters method_body
+    : attribute* modifiers return_type IDENTIFIER type_parameters? parameters method_body
     ;
 
 constructor_declaration
-    : visibility_modifier? IDENTIFIER parameters statement_block
+    : attribute* visibility_modifier? IDENTIFIER parameters statement_block
     ;
 
 parameters
@@ -322,7 +343,7 @@ method_body
     ;
 
 operator_declaration
-    : OPERATOR overloadable_operator parameters method_body
+    : attribute* OPERATOR overloadable_operator parameters method_body
     ;
 
 overloadable_operator
@@ -345,7 +366,7 @@ overloadable_operator
 // =============================================================================
 
 class_declaration
-    : CLASS IDENTIFIER type_parameters? inheritance_clause? class_body
+    : attribute* CLASS IDENTIFIER type_parameters? inheritance_clause? class_body
     ;
 
 class_body
@@ -360,7 +381,7 @@ class_member
     ;
 
 struct_declaration
-    : STRUCT IDENTIFIER type_parameters? inheritance_clause? struct_body
+    : attribute* STRUCT IDENTIFIER type_parameters? inheritance_clause? struct_body
     ;
 
 struct_body
@@ -379,7 +400,7 @@ inheritance_clause
     ;
 
 trait_declaration
-    : TRAIT IDENTIFIER type_parameters? trait_body
+    : attribute* TRAIT IDENTIFIER type_parameters? trait_body
     ;
 
 trait_body
@@ -396,7 +417,7 @@ trait_member
     ;
 
 union_declaration
-    : TAGGED? UNION IDENTIFIER type_parameters? union_body
+    : attribute* TAGGED? UNION IDENTIFIER type_parameters? union_body
     ;
 
 union_body
@@ -412,7 +433,7 @@ union_variant
     ;
 
 impl_declaration
-    : IMPL type FOR type (COMMA type)* (impl_block | SEMICOLON)
+    : attribute* IMPL type FOR type (COMMA type)* (impl_block | SEMICOLON)
     ;
 
 impl_block

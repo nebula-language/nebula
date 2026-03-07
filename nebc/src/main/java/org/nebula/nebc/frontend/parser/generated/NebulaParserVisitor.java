@@ -283,6 +283,18 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitParenthesized_pattern(NebulaParser.Parenthesized_patternContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link NebulaParser#attribute}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitAttribute(NebulaParser.AttributeContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#attribute_path}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitAttribute_path(NebulaParser.Attribute_pathContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link NebulaParser#const_declaration}.
 	 * @param ctx the parse tree
 	 * @return the visitor result

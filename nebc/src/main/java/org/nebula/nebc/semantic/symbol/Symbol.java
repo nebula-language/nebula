@@ -4,6 +4,9 @@ import org.nebula.nebc.ast.ASTNode;
 import org.nebula.nebc.semantic.SymbolTable;
 import org.nebula.nebc.semantic.types.Type;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * A Symbol represents a named entity in the program: a variable, method, type,
  * or namespace.
@@ -22,11 +25,27 @@ import org.nebula.nebc.semantic.types.Type;
  */
 public abstract sealed class Symbol permits VariableSymbol, MethodSymbol, TypeSymbol, NamespaceSymbol
 {
+	/**
+	 * Represents a single compile-time attribute attached to a symbol.
+	 *
+	 * <p>{@code path} is the qualified attribute name (e.g. {@code "test"} or
+	 * {@code "std::derive"}).  {@code args} holds the string representation of
+	 * each argument expression as it appeared in the source, which is sufficient
+	 * for the reflection use-cases envisioned by {@code std::attributes}.</p>
+	 */
+	public record AttributeInfo(String path, List<String> args)
+	{
+		public AttributeInfo
+		{
+			args = Collections.unmodifiableList(args);
+		}
+	}
 
 	private final String name;
 	private final Type type;
 	private final ASTNode declarationNode; // nullable for built-ins
 	protected SymbolTable definedIn;
+	private List<AttributeInfo> attributes = Collections.emptyList();
 
 	protected Symbol(String name, Type type, ASTNode declarationNode)
 	{
@@ -102,6 +121,24 @@ public abstract sealed class Symbol permits VariableSymbol, MethodSymbol, TypeSy
 	public ASTNode getDeclarationNode()
 	{
 		return declarationNode;
+	}
+
+	/**
+	 * Returns the compile-time attributes attached to this symbol.
+	 * Empty for symbols that have no {@code #[...]} annotations.
+	 */
+	public List<AttributeInfo> getAttributes()
+	{
+		return attributes;
+	}
+
+	/**
+	 * Attaches compile-time attribute metadata to this symbol.
+	 * Called by the semantic analyser after the symbol is created.
+	 */
+	public void setAttributes(List<AttributeInfo> attrs)
+	{
+		this.attributes = attrs != null ? List.copyOf(attrs) : Collections.emptyList();
 	}
 
 	@Override

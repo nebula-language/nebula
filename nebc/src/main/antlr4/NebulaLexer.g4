@@ -168,6 +168,7 @@ PIPE: '|';
 CARET: '^';
 BANG: '!';
 TILDE: '~';
+HASH: '#';
 ASSIGNMENT: '=';
 LT: '<';
 GT: '>';

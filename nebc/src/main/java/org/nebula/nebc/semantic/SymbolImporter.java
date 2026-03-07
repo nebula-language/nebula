@@ -289,6 +289,9 @@ public class SymbolImporter
             }
         }
 
+        if (obj.has("attributes"))
+            ms.setAttributes(importAttributes(obj.getAsJsonArray("attributes")));
+
         return ms;
     }
 
@@ -339,6 +342,9 @@ public class SymbolImporter
             }
         }
 
+        if (obj.has("attributes"))
+            sym.setAttributes(importAttributes(obj.getAsJsonArray("attributes")));
+
         return sym;
     }
 
@@ -358,15 +364,46 @@ public class SymbolImporter
                 type.getMemberScope().define(new VariableSymbol(vName, type, false, null));
             }
         }
+
+        if (obj.has("attributes"))
+            sym.setAttributes(importAttributes(obj.getAsJsonArray("attributes")));
+
         return sym;
     }
 
     private VariableSymbol importVariable(JsonObject obj, SymbolTable table)
     {
-        String  name = obj.get("name").getAsString();
-        Type    type = resolveType(obj.get("type").getAsString(), table);
-        boolean mut  = obj.get("mutable").getAsBoolean();
-        return new VariableSymbol(name, type, mut, null);
+        String         name = obj.get("name").getAsString();
+        Type           type = resolveType(obj.get("type").getAsString(), table);
+        boolean        mut  = obj.get("mutable").getAsBoolean();
+        VariableSymbol vs   = new VariableSymbol(name, type, mut, null);
+        if (obj.has("attributes"))
+            vs.setAttributes(importAttributes(obj.getAsJsonArray("attributes")));
+        return vs;
+    }
+
+    // ── Attribute import ────────────────────────────────────────────────────────
+
+    /**
+     * Deserialises a {@code "attributes"} JSON array into a list of
+     * {@link Symbol.AttributeInfo} records.
+     */
+    private java.util.List<Symbol.AttributeInfo> importAttributes(JsonArray arr)
+    {
+        java.util.List<Symbol.AttributeInfo> result = new ArrayList<>();
+        for (JsonElement el : arr)
+        {
+            JsonObject   ao   = el.getAsJsonObject();
+            String       path = ao.get("path").getAsString();
+            java.util.List<String> args = new ArrayList<>();
+            if (ao.has("args"))
+            {
+                for (JsonElement argEl : ao.getAsJsonArray("args"))
+                    args.add(argEl.getAsString());
+            }
+            result.add(new Symbol.AttributeInfo(path, args));
+        }
+        return result;
     }
 
     // ── Primitive impl import ───────────────────────────────────────────────────

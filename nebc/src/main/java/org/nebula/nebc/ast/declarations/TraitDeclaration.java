@@ -4,6 +4,7 @@ import org.nebula.nebc.ast.ASTVisitor;
 import org.nebula.nebc.ast.GenericParam;
 import org.nebula.nebc.frontend.diagnostic.SourceSpan;
 
+import java.util.Collections;
 import java.util.List;
 
 public class TraitDeclaration extends Declaration
@@ -11,13 +12,21 @@ public class TraitDeclaration extends Declaration
 	public final String name;
 	public final List<GenericParam> typeParams;
 	public final List<MethodDeclaration> members;
+	public final List<AttributeNode> attributes;
 
-	public TraitDeclaration(SourceSpan span, String name, List<GenericParam> typeParams, List<MethodDeclaration> members)
+	public TraitDeclaration(SourceSpan span, String name, List<GenericParam> typeParams, List<MethodDeclaration> members, List<AttributeNode> attributes)
 	{
 		super(span);
 		this.name = name;
 		this.typeParams = typeParams;
 		this.members = members;
+		this.attributes = Collections.unmodifiableList(attributes);
+	}
+
+	/** Backwards-compatible overload — no attributes. */
+	public TraitDeclaration(SourceSpan span, String name, List<GenericParam> typeParams, List<MethodDeclaration> members)
+	{
+		this(span, name, typeParams, members, Collections.emptyList());
 	}
 
 	@Override

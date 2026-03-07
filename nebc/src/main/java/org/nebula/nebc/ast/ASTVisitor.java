@@ -96,6 +96,18 @@ public interface ASTVisitor<R>
      */
     R visitConstructorDeclaration(ConstructorDeclaration node);
 
+    /**
+     * @grammar #[path] or #[path(args)]
+     *
+     * <p>Default no-op implementation: attribute nodes are embedded as metadata
+     * on their parent declaration and are not part of the normal tree walk.
+     * Override only when an explicit attribute traversal is needed.</p>
+     */
+    default R visitAttributeNode(AttributeNode node)
+    {
+        return null;
+    }
+
     // --------------------
     // ---- Statements ----
     // --------------------

@@ -97,7 +97,19 @@ public class ASTPrinter implements ASTVisitor<String>
 	@Override
 	public String visitClassDeclaration(ClassDeclaration node)
 	{
-		return line("Class: " + node.name) + visitNodes("Inheritance", node.inheritance) + visitNodes("Members", node.members);
+		return line("Class: " + node.name)
+			+ visitNodes("Attributes", node.attributes)
+			+ visitNodes("Inheritance", node.inheritance)
+			+ visitNodes("Members", node.members);
+	}
+
+	@Override
+	public String visitAttributeNode(AttributeNode node)
+	{
+		StringBuilder sb = new StringBuilder(line("#[" + node.path + "]"));
+		if (!node.args.isEmpty())
+			sb.append(visitNodes("Args", node.args));
+		return sb.toString();
 	}
 
 	@Override
@@ -105,6 +117,7 @@ public class ASTPrinter implements ASTVisitor<String>
 	{
 		String mods = node.modifiers.toString();
 		StringBuilder sb = new StringBuilder(line("Method: " + node.name + " " + mods));
+		sb.append(visitNodes("Attributes", node.attributes));
 		sb.append(visitNode("ReturnType", node.returnType));
 
 		// Manual loop for Parameters
@@ -144,19 +157,24 @@ public class ASTPrinter implements ASTVisitor<String>
 	@Override
 	public String visitConstDeclaration(ConstDeclaration node)
 	{
-		return line("Const") + visitNode("Inner", node.declaration);
+		return line("Const")
+			+ visitNodes("Attributes", node.attributes)
+			+ visitNode("Inner", node.declaration);
 	}
 
 	@Override
 	public String visitStructDeclaration(StructDeclaration node)
 	{
-		return line("Struct: " + node.name) + visitNodes("Members", node.members);
+		return line("Struct: " + node.name)
+			+ visitNodes("Attributes", node.attributes)
+			+ visitNodes("Members", node.members);
 	}
 
 	@Override
 	public String visitEnumDeclaration(EnumDeclaration node)
 	{
 		StringBuilder sb = new StringBuilder(line("Enum: " + node.name));
+		sb.append(visitNodes("Attributes", node.attributes));
 		indentLevel++;
 		for (String variant : node.variants)
 		{
@@ -169,19 +187,26 @@ public class ASTPrinter implements ASTVisitor<String>
 	@Override
 	public String visitTraitDeclaration(TraitDeclaration node)
 	{
-		return line("Trait: " + node.name) + visitNodes("Members", node.members);
+		return line("Trait: " + node.name)
+			+ visitNodes("Attributes", node.attributes)
+			+ visitNodes("Members", node.members);
 	}
 
 	@Override
 	public String visitImplDeclaration(ImplDeclaration node)
 	{
-		return line("Impl: " + node.traitType) + visitNode("Target", node.targetType) + visitNodes("Members", node.members);
+		return line("Impl: " + node.traitType)
+			+ visitNodes("Attributes", node.attributes)
+			+ visitNode("Target", node.targetType)
+			+ visitNodes("Members", node.members);
 	}
 
 	@Override
 	public String visitUnionDeclaration(UnionDeclaration node)
 	{
-		return line("Union: " + node.name) + visitNodes("Variants", node.variants);
+		return line("Union: " + node.name)
+			+ visitNodes("Attributes", node.attributes)
+			+ visitNodes("Variants", node.variants);
 	}
 
 	@Override

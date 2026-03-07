@@ -8,6 +8,7 @@ import org.nebula.nebc.ast.Parameter;
 import org.nebula.nebc.ast.types.TypeNode;
 import org.nebula.nebc.frontend.diagnostic.SourceSpan;
 
+import java.util.Collections;
 import java.util.List;
 
 public class MethodDeclaration extends Declaration
@@ -19,8 +20,9 @@ public class MethodDeclaration extends Declaration
 	public final List<Parameter> parameters;
 	public final ASTNode body; // Can be a Block or an Expression (for =>)
 	public boolean isExtern;
+	public final List<AttributeNode> attributes;
 
-	public MethodDeclaration(SourceSpan span, boolean isExtern, List<Modifier> modifiers, TypeNode returnType, String name, List<GenericParam> typeParams, List<Parameter> parameters, ASTNode body)
+	public MethodDeclaration(SourceSpan span, boolean isExtern, List<Modifier> modifiers, TypeNode returnType, String name, List<GenericParam> typeParams, List<Parameter> parameters, ASTNode body, List<AttributeNode> attributes)
 	{
 		super(span);
 		this.isExtern = isExtern;
@@ -30,6 +32,13 @@ public class MethodDeclaration extends Declaration
 		this.typeParams = typeParams;
 		this.parameters = parameters;
 		this.body = body;
+		this.attributes = Collections.unmodifiableList(attributes);
+	}
+
+	/** Backwards-compatible overload — no attributes. */
+	public MethodDeclaration(SourceSpan span, boolean isExtern, List<Modifier> modifiers, TypeNode returnType, String name, List<GenericParam> typeParams, List<Parameter> parameters, ASTNode body)
+	{
+		this(span, isExtern, modifiers, returnType, name, typeParams, parameters, body, Collections.emptyList());
 	}
 
 	@Override

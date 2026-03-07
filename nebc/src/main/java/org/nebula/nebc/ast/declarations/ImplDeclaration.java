@@ -4,6 +4,7 @@ import org.nebula.nebc.ast.ASTVisitor;
 import org.nebula.nebc.ast.types.TypeNode;
 import org.nebula.nebc.frontend.diagnostic.SourceSpan;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -20,12 +21,22 @@ public class ImplDeclaration extends Declaration
     /** The method implementations in this block. */
     public final List<MethodDeclaration> members;
 
-    public ImplDeclaration(SourceSpan span, TypeNode traitType, TypeNode targetType, List<MethodDeclaration> members)
+    /** Compile-time attributes on this impl block. */
+    public final List<AttributeNode> attributes;
+
+    public ImplDeclaration(SourceSpan span, TypeNode traitType, TypeNode targetType, List<MethodDeclaration> members, List<AttributeNode> attributes)
     {
         super(span);
         this.traitType = traitType;
         this.targetType = targetType;
         this.members = members;
+        this.attributes = Collections.unmodifiableList(attributes);
+    }
+
+    /** Backwards-compatible overload — no attributes. */
+    public ImplDeclaration(SourceSpan span, TypeNode traitType, TypeNode targetType, List<MethodDeclaration> members)
+    {
+        this(span, traitType, targetType, members, Collections.emptyList());
     }
 
     @Override

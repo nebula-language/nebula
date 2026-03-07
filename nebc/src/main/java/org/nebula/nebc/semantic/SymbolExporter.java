@@ -190,6 +190,7 @@ public class SymbolExporter
             }
         }
 
+        exportAttributes(ms.getAttributes(), obj);
         return obj;
     }
 
@@ -237,6 +238,7 @@ public class SymbolExporter
             obj.add("members", members);
         }
 
+        exportAttributes(ts.getAttributes(), obj);
         return obj;
     }
 
@@ -247,7 +249,37 @@ public class SymbolExporter
         obj.addProperty("name", vs.getName());
         obj.addProperty("type", vs.getType().name());
         obj.addProperty("mutable", vs.isMutable());
+        exportAttributes(vs.getAttributes(), obj);
         return obj;
+    }
+
+    /**
+     * Serialises a symbol's attribute list into a {@code "attributes"} JSON array
+     * on {@code target}.  The array is only written when there is at least one
+     * attribute, keeping the output compact for the common no-attribute case.
+     */
+    private void exportAttributes(
+            java.util.List<org.nebula.nebc.semantic.symbol.Symbol.AttributeInfo> attributes,
+            JsonObject target)
+    {
+        if (attributes == null || attributes.isEmpty())
+            return;
+
+        JsonArray arr = new JsonArray();
+        for (var attr : attributes)
+        {
+            JsonObject ao = new JsonObject();
+            ao.addProperty("path", attr.path());
+            if (!attr.args().isEmpty())
+            {
+                JsonArray argsArr = new JsonArray();
+                for (String a : attr.args())
+                    argsArr.add(a);
+                ao.add("args", argsArr);
+            }
+            arr.add(ao);
+        }
+        target.add("attributes", arr);
     }
 
     // ── Primitive impl export ────────────────────────────────────────────────────

@@ -87,21 +87,21 @@ public class Desugarer implements ASTVisitor<ASTNode>
 				decls.add(decl);
 			}
 		}
-		return new VariableDeclaration(node.getSpan(), node.type, decls, node.isVar, node.isBacklink);
+		return new VariableDeclaration(node.getSpan(), node.type, decls, node.isVar, node.isBacklink, node.attributes);
 	}
 
 	@Override
 	public ASTNode visitConstDeclaration(ConstDeclaration node)
 	{
 		VariableDeclaration vd = (VariableDeclaration) node.declaration.accept(this);
-		return new ConstDeclaration(node.getSpan(), vd);
+		return new ConstDeclaration(node.getSpan(), vd, node.attributes);
 	}
 
 	@Override
 	public ASTNode visitMethodDeclaration(MethodDeclaration node)
 	{
 		ASTNode body = node.body != null ? node.body.accept(this) : null;
-		return new MethodDeclaration(node.getSpan(), node.isExtern, node.modifiers, node.returnType, node.name, node.typeParams, node.parameters, body);
+		return new MethodDeclaration(node.getSpan(), node.isExtern, node.modifiers, node.returnType, node.name, node.typeParams, node.parameters, body, node.attributes);
 	}
 
 	@Override
@@ -112,7 +112,7 @@ public class Desugarer implements ASTVisitor<ASTNode>
 		{
 			members.add((Declaration) node.members.get(i).accept(this));
 		}
-		return new ClassDeclaration(node.getSpan(), node.name, node.typeParams, node.inheritance, members);
+		return new ClassDeclaration(node.getSpan(), node.name, node.typeParams, node.inheritance, members, node.attributes);
 	}
 
 	@Override
@@ -123,7 +123,7 @@ public class Desugarer implements ASTVisitor<ASTNode>
 		{
 			members.add((Declaration) node.members.get(i).accept(this));
 		}
-		return new StructDeclaration(node.getSpan(), node.name, node.typeParams, node.inheritance, members);
+		return new StructDeclaration(node.getSpan(), node.name, node.typeParams, node.inheritance, members, node.attributes);
 	}
 
 	@Override
@@ -134,7 +134,7 @@ public class Desugarer implements ASTVisitor<ASTNode>
 		{
 			members.add((MethodDeclaration) node.members.get(i).accept(this));
 		}
-		return new TraitDeclaration(node.getSpan(), node.name, node.typeParams, members);
+		return new TraitDeclaration(node.getSpan(), node.name, node.typeParams, members, node.attributes);
 	}
 
 	@Override
@@ -145,7 +145,7 @@ public class Desugarer implements ASTVisitor<ASTNode>
 		{
 			members.add((MethodDeclaration) node.members.get(i).accept(this));
 		}
-		return new ImplDeclaration(node.getSpan(), (TypeNode) node.traitType.accept(this), (TypeNode) node.targetType.accept(this), members);
+		return new ImplDeclaration(node.getSpan(), (TypeNode) node.traitType.accept(this), (TypeNode) node.targetType.accept(this), members, node.attributes);
 	}
 
 	@Override
@@ -170,14 +170,14 @@ public class Desugarer implements ASTVisitor<ASTNode>
 	public ASTNode visitOperatorDeclaration(OperatorDeclaration node)
 	{
 		ASTNode body = node.body != null ? node.body.accept(this) : null;
-		return new OperatorDeclaration(node.getSpan(), node.operatorToken, node.parameters, body);
+		return new OperatorDeclaration(node.getSpan(), node.operatorToken, node.parameters, body, node.attributes);
 	}
 
 	@Override
 	public ASTNode visitConstructorDeclaration(ConstructorDeclaration node)
 	{
 		ASTNode body = node.body != null ? node.body.accept(this) : null;
-		return new ConstructorDeclaration(node.getSpan(), node.name, node.parameters, body);
+		return new ConstructorDeclaration(node.getSpan(), node.name, node.parameters, body, node.attributes);
 	}
 
 	// --------------------
