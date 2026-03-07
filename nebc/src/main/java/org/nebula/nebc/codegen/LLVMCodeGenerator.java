@@ -1684,6 +1684,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			return value;
 		}
 
+		// Tagged unions are also value types { i32 tag, [N x i8] payload } — return by value.
+		if (retType instanceof UnionType && srcType instanceof CompositeType)
+		{
+			return value;
+		}
+
 		// Classes are reference types — return a pointer.
 		if (retType instanceof CompositeType retCt && srcType instanceof CompositeType)
 		{
@@ -3395,7 +3401,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				// The union struct type was registered with key "union.TypeName".
 				LLVMTypeRef i8t = LLVMInt8TypeInContext(context);
 				LLVMTypeRef i32t = LLVMInt32TypeInContext(context);
-				LLVMTypeRef payloadArr = LLVMArrayType(i8t, LLVMTypeMapper.UNION_PAYLOAD_BYTES);
+				LLVMTypeRef payloadArr = LLVMArrayType(i8t, LLVMTypeMapper.UNION_MIN_PAYLOAD_BYTES);
 				LLVMTypeRef unionStructType = LLVMGetTypeByName2(context, "union." + nt.name());
 				if (unionStructType == null || unionStructType.isNull())
 				{
@@ -3557,7 +3563,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				{
 					LLVMTypeRef i8t = LLVMInt8TypeInContext(context);
 					LLVMTypeRef i32t = LLVMInt32TypeInContext(context);
-					LLVMTypeRef payloadArr = LLVMArrayType(i8t, LLVMTypeMapper.UNION_PAYLOAD_BYTES);
+					LLVMTypeRef payloadArr = LLVMArrayType(i8t, LLVMTypeMapper.UNION_MIN_PAYLOAD_BYTES);
 					LLVMTypeRef unionStructType = LLVMTypeMapper.getOrCreateUnionStructType(context, ut);
 					LLVMValueRef unionAlloca = LLVMBuildAlloca(builder, unionStructType, "union_tag_only");
 					LLVMValueRef tagGep = LLVMBuildStructGEP2(builder, unionStructType, unionAlloca, 0, "tag_gep");

@@ -58,7 +58,7 @@ public final class LLVMTypeMapper
 		{
 			return LLVMInt32TypeInContext(ctx);
 		}
-		// Tagged unions: { i32 tag, [UNION_PAYLOAD_BYTES x i8] payload }
+		// Tagged unions: { i32 tag, [N x i8] payload } where N is computed dynamically
 		if (type instanceof UnionType ut)
 		{
 			return getOrCreateUnionStructType(ctx, ut);
@@ -262,10 +262,10 @@ public final class LLVMTypeMapper
 
 	/**
 	 * Tagged-union IR layout: {@code { i32 tag, [PAYLOAD_BYTES x i8] payload }}.
-	 * The payload region is large enough to hold the widest variant payload.
+	 * The payload region is dynamically sized to hold the widest variant payload.
 	 * Variant-specific accessor structs use bitcasting at the call-site.
 	 */
-	public static final int UNION_PAYLOAD_BYTES = 16; // big enough for str {i8*,i64}
+	public static final int UNION_MIN_PAYLOAD_BYTES = 16; // minimum: big enough for str {i8*,i64}
 
 	public static LLVMTypeRef getOrCreateUnionStructType(LLVMContextRef ctx, UnionType ut)
 	{
@@ -276,12 +276,100 @@ public final class LLVMTypeMapper
 		LLVMTypeRef structType = LLVMStructCreateNamed(ctx, key);
 		structTypes.put(key, structType); // register early to break recursion
 
-		// { i32, [UNION_PAYLOAD_BYTES x i8] }
+		// Compute the maximum payload size from the variant constructors.
+		int maxPayload = UNION_MIN_PAYLOAD_BYTES;
+		java.util.Set<String> visited = new java.util.HashSet<>();
+		visited.add(ut.name()); // guard against self-referential unions
+		for (var entry : ut.getMemberScope().getSymbols().entrySet())
+		{
+			if (entry.getValue() instanceof org.nebula.nebc.semantic.symbol.MethodSymbol ms)
+			{
+				FunctionType ft = ms.getType();
+				if (!ft.parameterTypes.isEmpty())
+				{
+					int variantSize = estimateTypeSize(ctx, ft.parameterTypes.get(0), visited);
+					if (variantSize > maxPayload)
+						maxPayload = variantSize;
+				}
+			}
+		}
+
+		// { i32, [maxPayload x i8] }
 		LLVMTypeRef i32t    = LLVMInt32TypeInContext(ctx);
-		LLVMTypeRef payload = LLVMArrayType(LLVMInt8TypeInContext(ctx), UNION_PAYLOAD_BYTES);
+		LLVMTypeRef payload = LLVMArrayType(LLVMInt8TypeInContext(ctx), maxPayload);
 		LLVMTypeRef[] fields = {i32t, payload};
 		LLVMStructSetBody(structType, new PointerPointer<>(fields), 2, 0);
 		return structType;
+	}
+
+	/**
+	 * Estimates the byte size of a Nebula type for tagged-union payload sizing.
+	 * Uses the LLVM type system where possible, with manual estimates as fallback.
+	 * The {@code visited} set prevents infinite recursion on cyclic type graphs.
+	 */
+	private static int estimateTypeSize(LLVMContextRef ctx, Type type, java.util.Set<String> visited)
+	{
+		if (type instanceof PrimitiveType pt)
+		{
+			if (pt == PrimitiveType.BOOL || pt == PrimitiveType.I8 || pt == PrimitiveType.U8) return 1;
+			if (pt == PrimitiveType.I16 || pt == PrimitiveType.U16 || pt == PrimitiveType.CHAR) return 2;
+			if (pt == PrimitiveType.I32 || pt == PrimitiveType.U32 || pt == PrimitiveType.F32) return 4;
+			if (pt == PrimitiveType.I64 || pt == PrimitiveType.U64 || pt == PrimitiveType.F64) return 8;
+			if (pt == PrimitiveType.STR) return 16; // { ptr, i64 }
+		}
+		if (type instanceof EnumType) return 4;
+		if (type instanceof org.nebula.nebc.semantic.types.StructType st)
+		{
+			// Cycle detection: if we've already seen this struct, return pointer size
+			if (!visited.add(st.name()))
+				return 8;
+			// Compute struct size from its fields.
+			int size = 0;
+			for (var sym : st.getMemberScope().getSymbols().values())
+			{
+				if (sym instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs)
+				{
+					int fieldSize = estimateTypeSize(ctx, vs.getType(), visited);
+					// Align field to its natural alignment
+					int align = Math.min(fieldSize, 8);
+					if (align > 0 && size % align != 0)
+						size += align - (size % align);
+					size += fieldSize;
+				}
+			}
+			// Final struct alignment to 8 bytes
+			if (size % 8 != 0)
+				size += 8 - (size % 8);
+			return Math.max(size, 8);
+		}
+		if (type instanceof UnionType innerUt)
+		{
+			// Cycle detection
+			if (!visited.add(innerUt.name()))
+				return 8;
+			// Nested union: tag (4) + max payload
+			int maxInner = UNION_MIN_PAYLOAD_BYTES;
+			for (var entry : innerUt.getMemberScope().getSymbols().entrySet())
+			{
+				if (entry.getValue() instanceof org.nebula.nebc.semantic.symbol.MethodSymbol ms)
+				{
+					FunctionType ft = ms.getType();
+					if (!ft.parameterTypes.isEmpty())
+					{
+						int variantSize = estimateTypeSize(ctx, ft.parameterTypes.get(0), visited);
+						if (variantSize > maxInner)
+							maxInner = variantSize;
+					}
+				}
+			}
+			return 4 + maxInner;
+		}
+		if (type instanceof OptionalType ot)
+		{
+			return 1 + estimateTypeSize(ctx, ot.innerType, visited); // i1 + inner
+		}
+		// Default: pointer-sized (for classes, function pointers, etc.)
+		return 8;
 	}
 
 	/**
