@@ -129,6 +129,15 @@ public class Compiler
 			{
 				analyzer.declareClassBodies(cu);
 			}
+
+		// Phase 1.97: Pre-register all impl method signatures on target types.
+		// This ensures trait methods (e.g. toStr from impl Stringable) are visible
+		// to the type checker in Phase 2 regardless of source declaration order.
+		for (var cu : compilationUnits)
+		{
+			analyzer.declareImplBodies(cu);
+		}
+
 		// Phase 2: Full visitation — solve bodies, check types.
 		for (var cu : compilationUnits)
 		{

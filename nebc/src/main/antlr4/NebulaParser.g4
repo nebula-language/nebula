@@ -221,6 +221,7 @@ pattern_atom
     | UNDERSCORE
     | destructuring_pattern
     | IDENTIFIER
+    | tuple_pattern
     | parenthesized_pattern
     ;
 
@@ -230,6 +231,10 @@ destructuring_pattern
 
 binding_list
     : IDENTIFIER (COMMA IDENTIFIER)*
+    ;
+
+tuple_pattern
+    : OPEN_PARENS pattern_atom (COMMA pattern_atom)+ CLOSE_PARENS
     ;
 
 parenthesized_pattern

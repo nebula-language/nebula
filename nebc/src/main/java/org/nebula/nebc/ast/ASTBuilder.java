@@ -1077,11 +1077,23 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			TypeNode type = new NamedType(span, ctx.IDENTIFIER().getText(), Collections.emptyList());
 			return new TypePattern(span, type, null);
 		}
+		if (ctx.tuple_pattern() != null)
+			return visit(ctx.tuple_pattern());
 		if (ctx.parenthesized_pattern() != null)
 			return visit(ctx.parenthesized_pattern().pattern());
 		if (ctx.destructuring_pattern() != null)
 			return (Pattern) visit(ctx.destructuring_pattern());
 		return null;
+	}
+
+	@Override
+	public ASTNode visitTuple_pattern(NebulaParser.Tuple_patternContext ctx)
+	{
+		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
+		List<Pattern> elements = new ArrayList<>();
+		for (var atomCtx : ctx.pattern_atom())
+			elements.add((Pattern) visit(atomCtx));
+		return new TuplePattern(span, elements);
 	}
 
 	@Override

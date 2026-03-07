@@ -190,9 +190,22 @@ public class SymbolTable
 	 * intermediate scopes (e.g. a constructor method that shares the struct's
 	 * name). This ensures that a constructor defined inside a struct member scope
 	 * does not shadow the type symbol that lives in the enclosing scope.
+	 * <p>
+	 * Supports qualified names using "::" (e.g. {@code std::io::Stringable}),
+	 * mirroring the qualified-name handling in {@link #resolve(String)}.
 	 */
 	private TypeSymbol resolveType(String name, boolean useParent)
 	{
+		// Handle qualified names: std::io::Stringable
+		if (name.contains("::"))
+		{
+			String[] parts = name.split("::", 2);
+			Symbol prefix = resolve(parts[0], useParent);
+			if (prefix instanceof NamespaceSymbol ns)
+				return ns.getMemberTable().resolveType(parts[1], false);
+			return null;
+		}
+
 		Symbol sym = symbols.get(name);
 		if (sym instanceof TypeSymbol ts)
 			return ts;

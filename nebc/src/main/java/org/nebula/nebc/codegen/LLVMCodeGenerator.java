@@ -480,6 +480,20 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitCompilationUnit(CompilationUnit node)
 	{
+		// Pre-pass: register all enum discriminants before emitting any function body,
+		// so that unqualified variant references (e.g. Mushroom, Super) resolve correctly
+		// even when the enum declaration appears after its first use in source order.
+		for (ASTNode decl : node.declarations)
+		{
+			if (decl instanceof EnumDeclaration ed)
+			{
+				for (int i = 0; i < ed.variants.size(); i++)
+				{
+					enumDiscriminants.put(ed.name + "." + ed.variants.get(i), i);
+				}
+			}
+		}
+
 		for (ASTNode decl : node.declarations)
 		{
 			decl.accept(this);
@@ -1484,6 +1498,14 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		}
 
 		FunctionType funcType = symbol.getType();
+		// Apply the active substitution so that type parameters inherited from the
+		// enclosing generic struct (e.g. T → i32) are resolved before we map to LLVM
+		// types.  The constructor's own MethodSymbol may still carry the raw
+		// TypeParameterType when retrieved from the generic scope.
+		if (currentSubstitution != null)
+		{
+			funcType = (FunctionType) currentSubstitution.substitute(funcType);
+		}
 		Type returnType = funcType.getReturnType();
 		LLVMTypeRef llvmFuncType = toLLVMType(funcType);
 
@@ -2836,6 +2858,16 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			return LLVMBuildLoad2(builder, expectedType, globalVar, node.name + "_load");
 		}
 
+		// Try to resolve as an unqualified enum variant (e.g. `Super` instead of `Form.Super`).
+		// The SA records the symbol as a VariableSymbol whose type is the EnumType.
+		if (sym instanceof VariableSymbol vs && vs.getType() instanceof EnumType et)
+		{
+			String key = et.name() + "." + node.name;
+			Integer disc = enumDiscriminants.get(key);
+			if (disc != null)
+				return LLVMConstInt(LLVMInt32TypeInContext(context), disc, 0);
+		}
+
 		throw new CodegenException("Undeclared identifier referenced in codegen: " + node.name);
 	}
 
@@ -4019,6 +4051,36 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		if (partType == PrimitiveType.STR)
 			return argVal;
 
+		// Check if the type implements Stringable — i.e. has a 'toStr' method in scope.
+		// This covers enums, structs, and classes.  Primitives are excluded because they
+		// are handled by the dedicated runtime helpers below (e.g. i32 → __nebula_rt_i32_to_str).
+		if (partType instanceof CompositeType ct)
+		{
+			SymbolTable typeScope = ct.getMemberScope();
+			Symbol toStrSym = typeScope.resolveLocal("toStr");
+			if (toStrSym instanceof MethodSymbol toStrMs)
+			{
+				String mangledName = toStrMs.getMangledName();
+				LLVMTypeRef strResultType = LLVMTypeMapper.getOrCreateStructType(context, PrimitiveType.STR);
+				LLVMTypeRef thisLlvmType = toLLVMType(partType);
+				LLVMTypeRef toStrFnType = LLVMFunctionType(strResultType,
+					new PointerPointer<>(new LLVMTypeRef[]{ thisLlvmType }), 1, 0);
+				LLVMValueRef toStrFn = LLVMGetNamedFunction(module, mangledName);
+				if (toStrFn == null || toStrFn.isNull())
+				{
+					toStrFn = LLVMAddFunction(module, mangledName, toStrFnType);
+				}
+				else
+				{
+					// Use the already-emitted function's own type to avoid sig mismatches
+					toStrFnType = LLVMGlobalGetValueType(toStrFn);
+				}
+				LLVMValueRef[] toStrArgs = { argVal };
+				return LLVMBuildCall2(builder, toStrFnType, toStrFn,
+					new PointerPointer<>(toStrArgs), 1, "tostr_result");
+			}
+		}
+
 		// bool → __nebula_rt_bool_to_str(i32)
 		if (partType == PrimitiveType.BOOL)
 		{
@@ -4695,6 +4757,32 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			return result;
 		}
 
+		if (pat instanceof TuplePattern tp)
+		{
+			// Match each element of the tuple independently, AND all conditions together.
+			if (!(selectorType instanceof TupleType tt))
+				return null; // type mismatch — treat as wildcard
+
+			LLVMValueRef combined = null;
+			for (int i = 0; i < tp.elements.size() && i < tt.elementTypes.size(); i++)
+			{
+				Pattern      elemPat      = tp.elements.get(i);
+				Type         elemType     = tt.elementTypes.get(i);
+				LLVMValueRef elemVal      = LLVMBuildExtractValue(builder, selectorVal, i, "tup_elem_" + i);
+				LLVMValueRef elemTagVal   = (elemType instanceof EnumType)  ? elemVal : null;
+				String       elemUnionNm  = (elemType instanceof UnionType) ? elemType.name() : null;
+
+				LLVMValueRef elemCond = emitPatternCondition(elemPat, elemVal, elemType, elemTagVal, elemUnionNm);
+				if (elemCond == null)
+					continue; // wildcard element — always matches, skip
+
+				combined = (combined == null)
+					? elemCond
+					: LLVMBuildAnd(builder, combined, elemCond, "tup_and");
+			}
+			return combined; // null if every sub-pattern is a wildcard
+		}
+
 		return null; // unknown pattern — treat as wildcard
 	}
 
@@ -4821,6 +4909,13 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	public LLVMValueRef visitMatchArm(MatchArm node)
 	{
 		// Arms are emitted inline inside visitMatchExpression.
+		return null;
+	}
+
+	@Override
+	public LLVMValueRef visitTuplePattern(TuplePattern node)
+	{
+		// Tuple patterns are emitted inline inside emitPatternCondition.
 		return null;
 	}
 

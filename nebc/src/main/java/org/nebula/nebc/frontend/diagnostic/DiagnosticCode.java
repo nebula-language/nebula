@@ -33,6 +33,9 @@ public enum DiagnosticCode
 	UNSAFE_MEMBER_ACCESS_ON_OPTIONAL("Optional type '%s' requires safe access '?.' or explicit unwrap before member access."),
 	NONE_ASSIGNED_TO_NON_OPTIONAL("'none' cannot be assigned to non-optional type '%s'."),
 
+	// --- Structs ---
+	STRUCT_MISSING_CONSTRUCTOR("Struct '%s' has no constructor. All fields must be explicitly initialized via a constructor."),
+
 	// --- Tags ---
 	TAG_AS_VALUE_TYPE("Tag '%s' cannot be used as a value type. Tags are compile-time-only constraints; use '<T: %s>' in a generic."),
 	TAG_IN_PARAM_POSITION("Parameter type is tag '%s'. Use the generic type parameter instead: '<T: %s>(T param)'."),

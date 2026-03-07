@@ -109,6 +109,14 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					error(DiagnosticCode.TYPE_ALREADY_DEFINED, ed, ed.name);
 				}
+				// Pre-register variants in Phase 1 so unqualified variant names
+				// (e.g. Mushroom instead of Colletable.Mushroom) are resolvable
+				// in any method body regardless of source declaration order.
+				for (String variant : ed.variants)
+				{
+					enumType.getMemberScope().define(
+						new VariableSymbol(variant, enumType, false, ed));
+				}
 			}
 			else if (decl instanceof UnionDeclaration ud)
 			{
@@ -466,6 +474,44 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				currentTypeDefinition = prevTypeDef;
 				currentScope = outerScope;
 			}
+			else if (decl instanceof StructDeclaration sd)
+			{
+				TypeSymbol sym = currentScope.resolveType(sd.name);
+				if (sym == null || !(sym.getType() instanceof StructType structType))
+					continue;
+
+				SymbolTable outerScope = currentScope;
+				Type prevTypeDef = currentTypeDefinition;
+				currentScope = structType.getMemberScope();
+				currentTypeDefinition = structType;
+				defineTypeParamsInScope(sd.typeParams, structType.getMemberScope());
+
+				// 'this' — no-op if already defined
+				currentScope.define(new VariableSymbol("this", structType, false, sd));
+
+				// Pre-declare each member signature, guarding against duplicates
+				for (Declaration member : sd.members)
+				{
+					if (member instanceof MethodDeclaration md
+							&& currentScope.resolveLocal(md.name) == null)
+					{
+						defineMethodSignature(md);
+					}
+					else if (member instanceof ConstructorDeclaration ctorDecl
+							&& currentScope.resolveLocal(ctorDecl.name) == null)
+					{
+						defineConstructorSignature(ctorDecl);
+					}
+					else if (member instanceof OperatorDeclaration od
+							&& currentScope.resolveLocal("operator" + od.operatorToken) == null)
+					{
+						defineOperatorSignature(od);
+					}
+				}
+
+				currentTypeDefinition = prevTypeDef;
+				currentScope = outerScope;
+			}
 		}
 	}
 
@@ -499,6 +545,126 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			table = nsSym.getMemberTable();
 		}
 		return table;
+	}
+
+	// =========================================================================
+	// Phase 1.97: Pre-register all impl method signatures on target types.
+	// Running this before Phase 2 ensures that a type's trait methods are
+	// visible to any code that references the type, regardless of source order.
+	// =========================================================================
+
+	public void declareImplBodies(CompilationUnit unit)
+	{
+		currentScope = globalScope;
+		processDirectives(unit);
+		declareImplBodiesRecursive(unit.declarations);
+	}
+
+	private void declareImplBodiesRecursive(List<ASTNode> declarations)
+	{
+		if (declarations == null)
+			return;
+		for (ASTNode decl : declarations)
+		{
+			if (decl instanceof NamespaceDeclaration nd)
+			{
+				if (nd.isBlockDeclaration)
+				{
+					SymbolTable original = currentScope;
+					currentScope = enterNamespace(nd, currentScope);
+					declareImplBodiesRecursive(nd.members);
+					currentScope = original;
+				}
+				else
+				{
+					currentScope = enterNamespace(nd, globalScope);
+				}
+			}
+			else if (decl instanceof ImplDeclaration id)
+			{
+				preRegisterImplSignatures(id);
+			}
+		}
+	}
+
+	/**
+	 * Registers the method signatures of an {@code impl} block on the target
+	 * type's member scope <em>without</em> visiting method bodies.
+	 * This makes trait methods (e.g. {@code toStr}) available to the type
+	 * checker in Phase 2 regardless of source declaration order.
+	 */
+	private void preRegisterImplSignatures(ImplDeclaration node)
+	{
+		Type traitResolved = resolveTagMemberType(node.traitType);
+		if (!(traitResolved instanceof TraitType traitType))
+			return;
+
+		Type targetType = resolveTagMemberType(node.targetType);
+		if (targetType == Type.ERROR)
+			return;
+
+		if (targetType instanceof TagType tagTarget)
+		{
+			for (Type member : tagTarget.getMemberTypes())
+			{
+				if (member instanceof TagType || member instanceof TraitType)
+					continue;
+				preRegisterImplSignaturesForType(node, traitType, member);
+			}
+		}
+		else
+		{
+			preRegisterImplSignaturesForType(node, traitType, targetType);
+		}
+	}
+
+	private void preRegisterImplSignaturesForType(
+			ImplDeclaration node, TraitType traitType, Type targetType)
+	{
+		SymbolTable targetScope;
+		if (targetType instanceof CompositeType composite)
+		{
+			targetScope = composite.getMemberScope();
+		}
+		else if (targetType instanceof PrimitiveType pt)
+		{
+			targetScope = primitiveImplScopes.computeIfAbsent(targetType, t ->
+			{
+				SymbolTable st = new SymbolTable(currentScope);
+				st.setOwner(new org.nebula.nebc.semantic.symbol.TypeSymbol(pt.name(), pt, null));
+				return st;
+			});
+			targetScope.addSuperScope(currentScope);
+		}
+		else
+		{
+			return;
+		}
+
+		SymbolTable outerScope = currentScope;
+		Type prevTypeDef = currentTypeDefinition;
+		currentScope = targetScope;
+		currentTypeDefinition = targetType;
+
+		try
+		{
+			targetScope.define(new org.nebula.nebc.semantic.symbol.VariableSymbol("this", targetType, false, node));
+			for (MethodDeclaration method : node.members)
+			{
+				if (targetScope.resolveLocal(method.name) == null)
+				{
+					defineMethodSignature(method);
+					org.nebula.nebc.semantic.symbol.MethodSymbol ms = getSymbol(method, org.nebula.nebc.semantic.symbol.MethodSymbol.class);
+					if (ms != null)
+						ms.setTraitName(traitType.name());
+				}
+			}
+		}
+		finally
+		{
+			currentScope = outerScope;
+			currentTypeDefinition = prevTypeDef;
+		}
 	}
 
 	public List<Diagnostic> analyze(CompilationUnit unit)
@@ -822,7 +988,37 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		// Define 'this' as a variable symbol pointing to the type
 		currentScope.define(new VariableSymbol("this", type, false, node));
 
-		// Pre-pass methods — skip any signature already declared by Phase 1.95
+		// Pre-pass 1: Register fields (VariableDeclarations) so that constructors and
+		// methods declared before a field in the source can still reference it.
+		// Only non-initializer fields are pre-registered here; fields with initializers
+		// are left to the main loop.
+		for (Declaration member : members)
+		{
+			if (member instanceof VariableDeclaration vd && !vd.isVar)
+			{
+				// Only pre-register if all declarators lack an initializer (struct fields)
+				boolean allNoInit = vd.declarators.stream().noneMatch(VariableDeclarator::hasInitializer);
+				if (allNoInit)
+				{
+					Type fieldType = resolveType(vd.type);
+					if (fieldType != null && !(fieldType instanceof TagType))
+					{
+						for (VariableDeclarator decl : vd.declarators)
+						{
+							if (currentScope.resolveLocal(decl.name()) == null)
+							{
+								VariableSymbol vs = new VariableSymbol(
+									decl.name(), fieldType, false, vd.isBacklink, vd);
+								currentScope.define(vs);
+								recordSymbol(vd, vs);
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Pre-pass 2: Register methods — skip any signature already declared by Phase 1.95
 		// to avoid duplicate-symbol errors when the same class is processed twice.
 		for (Declaration member : members)
 		{
@@ -847,9 +1043,19 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			}
 		}
 
-		// Visit members
+		// Visit members — skip VariableDeclarations that were already pre-registered
+		// (i.e. plain struct fields without initializers).
 		for (Declaration member : members)
 		{
+			if (member instanceof VariableDeclaration vd && !vd.isVar)
+			{
+				boolean allNoInit = vd.declarators.stream().noneMatch(VariableDeclarator::hasInitializer);
+				if (allNoInit)
+				{
+					// Already handled in pre-pass; just ensure the symbol is recorded.
+					continue;
+				}
+			}
 			member.accept(this);
 		}
 
@@ -1638,6 +1844,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				}
 				else
 				{
+					// No constructor symbol found at all.  For structs this is a hard error —
+					// all fields must be initialised through an explicit constructor.
+					if (compositeTarget instanceof StructType)
+					{
+						error(DiagnosticCode.STRUCT_MISSING_CONSTRUCTOR, node, compositeTarget.name());
+						return Type.ERROR;
+					}
 					fn = null;
 				}
 			}
@@ -1947,6 +2160,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	{
 		Symbol sym = currentScope.resolve(node.name);
 		if (sym == null)
+			sym = resolveEnumVariant(node.name);
+		if (sym == null)
 		{
 			error(DiagnosticCode.UNDEFINED_SYMBOL, node, node.name);
 			return Type.ERROR;
@@ -2086,6 +2301,35 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			return p.isInteger() || p.isFloat();
 		}
 		return false;
+	}
+
+	/**
+	 * Fallback identifier resolution that searches all enum member scopes reachable
+	 * from the current scope chain.  Allows unqualified enum variant names (e.g.
+	 * {@code Super} instead of {@code Form.Super}) to be used as expressions when
+	 * the context type is already constrained.
+	 *
+	 * <p>Walks each scope in the parent chain, inspects every {@link TypeSymbol}
+	 * whose underlying type is an {@link EnumType}, and returns the first variant
+	 * symbol whose name matches {@code name}.
+	 */
+	private Symbol resolveEnumVariant(String name)
+	{
+		SymbolTable scope = currentScope;
+		while (scope != null)
+		{
+			for (Symbol sym : scope.getSymbols().values())
+			{
+				if (sym instanceof TypeSymbol ts && ts.getType() instanceof EnumType et)
+				{
+					Symbol variant = et.getMemberScope().resolveLocal(name);
+					if (variant != null)
+						return variant;
+				}
+			}
+			scope = scope.getParent();
+		}
+		return null;
 	}
 
 	private boolean isIntegral(Type t)
@@ -2813,9 +3057,14 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			// Add a 'this' symbol for method bodies
 			targetScope.define(new VariableSymbol("this", targetType, false, node));
 
+			// Register method signatures — skip any already pre-registered by Phase 1.97
+			// to avoid duplicate-symbol errors when the same impl is visited twice.
 			for (MethodDeclaration method : node.members)
 			{
-				defineMethodSignature(method);
+				if (targetScope.resolveLocal(method.name) == null)
+				{
+					defineMethodSignature(method);
+				}
 				MethodSymbol ms = getSymbol(method, MethodSymbol.class);
 				if (ms != null)
 				{
@@ -3079,6 +3328,14 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		// Binding declarations are handled by visitMatchExpression's arm loop,
 		// which pushes a child scope and defines each binding variable.
 		// At this call-site there is nothing type-level to check; return null.
+		return null;
+	}
+
+	@Override
+	public Type visitTuplePattern(TuplePattern node)
+	{
+		for (Pattern sub : node.elements)
+			sub.accept(this);
 		return null;
 	}
 

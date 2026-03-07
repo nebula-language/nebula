@@ -583,6 +583,12 @@ public class Desugarer implements ASTVisitor<ASTNode>
 	}
 
 	@Override
+	public ASTNode visitTuplePattern(org.nebula.nebc.ast.patterns.TuplePattern node)
+	{
+		return node;
+	}
+
+	@Override
 	public ASTNode visitBreakStatement(org.nebula.nebc.ast.statements.BreakStatement node)
 	{
 		return node;

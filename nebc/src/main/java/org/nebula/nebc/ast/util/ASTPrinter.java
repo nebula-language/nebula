@@ -473,6 +473,15 @@ public class ASTPrinter implements ASTVisitor<String>
 	}
 
 	@Override
+	public String visitTuplePattern(org.nebula.nebc.ast.patterns.TuplePattern node)
+	{
+		StringBuilder sb = new StringBuilder(line("TuplePattern"));
+		for (org.nebula.nebc.ast.patterns.Pattern elem : node.elements)
+			sb.append(elem.accept(this));
+		return sb.toString();
+	}
+
+	@Override
 	public String visitBreakStatement(org.nebula.nebc.ast.statements.BreakStatement node)
 	{
 		return line("BreakStatement");

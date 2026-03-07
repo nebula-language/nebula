@@ -511,6 +511,18 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterTuple_pattern(NebulaParser.Tuple_patternContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitTuple_pattern(NebulaParser.Tuple_patternContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterParenthesized_pattern(NebulaParser.Parenthesized_patternContext ctx) { }
 	/**
 	 * {@inheritDoc}

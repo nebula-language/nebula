@@ -283,6 +283,11 @@ public interface ASTVisitor<R>
      */
     R visitDestructuringPattern(org.nebula.nebc.ast.patterns.DestructuringPattern node);
 
+    /**
+     * @grammar (pattern1, pattern2, ...) — matches a tuple of values element-wise.
+     */
+    R visitTuplePattern(org.nebula.nebc.ast.patterns.TuplePattern node);
+
     // --------------------
     // ---- Statements ----
     // --------------------

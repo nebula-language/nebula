@@ -34,7 +34,19 @@ public class Substitution
     {
         if (type instanceof TypeParameterType tpt)
         {
-            return mapping.getOrDefault(tpt, tpt);
+            // Fast path: exact identity match.
+            Type direct = mapping.get(tpt);
+            if (direct != null)
+                return direct;
+            // Fallback: match by parameter name so that TypeParameterType instances
+            // created in different scopes (e.g. struct member scope vs constructor
+            // FunctionType) still resolve correctly.
+            for (Map.Entry<TypeParameterType, Type> entry : mapping.entrySet())
+            {
+                if (entry.getKey().name().equals(tpt.name()))
+                    return entry.getValue();
+            }
+            return tpt;
         }
         if (type instanceof ArrayType at)
         {

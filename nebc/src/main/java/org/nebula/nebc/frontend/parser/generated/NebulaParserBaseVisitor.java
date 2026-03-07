@@ -307,6 +307,13 @@ public class NebulaParserBaseVisitor<T> extends AbstractParseTreeVisitor<T> impl
 	 * <p>The default implementation returns the result of calling
 	 * {@link #visitChildren} on {@code ctx}.</p>
 	 */
+	@Override public T visitTuple_pattern(NebulaParser.Tuple_patternContext ctx) { return visitChildren(ctx); }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation returns the result of calling
+	 * {@link #visitChildren} on {@code ctx}.</p>
+	 */
 	@Override public T visitParenthesized_pattern(NebulaParser.Parenthesized_patternContext ctx) { return visitChildren(ctx); }
 	/**
 	 * {@inheritDoc}
