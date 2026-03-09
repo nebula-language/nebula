@@ -547,6 +547,39 @@ public class SymbolImporter
      */
     private Type resolveType(String name, SymbolTable table, SymbolTable fallback)
     {
+        // Handle Optional suffix: "T?" → OptionalType(T)
+        if (name.endsWith("?"))
+        {
+            Type inner = resolveType(name.substring(0, name.length() - 1), table, fallback);
+            return new org.nebula.nebc.semantic.types.OptionalType(inner);
+        }
+
+        // Handle fixed-size array suffix: "T[N]" → ArrayType(T, N)
+        if (name.endsWith("]"))
+        {
+            int bracketOpen = name.lastIndexOf('[');
+            if (bracketOpen > 0)
+            {
+                String baseName = name.substring(0, bracketOpen);
+                String sizeStr = name.substring(bracketOpen + 1, name.length() - 1);
+                Type baseType = resolveType(baseName, table, fallback);
+                if (sizeStr.isEmpty())
+                {
+                    // Dynamic array "T[]"
+                    return new org.nebula.nebc.semantic.types.ArrayType(baseType, 0);
+                }
+                try
+                {
+                    int size = Integer.parseInt(sizeStr);
+                    return new org.nebula.nebc.semantic.types.ArrayType(baseType, size);
+                }
+                catch (NumberFormatException e)
+                {
+                    // Fall through to normal resolution
+                }
+            }
+        }
+
         Type t = PrimitiveType.getByName(name);
         if (t != null)
             return t;

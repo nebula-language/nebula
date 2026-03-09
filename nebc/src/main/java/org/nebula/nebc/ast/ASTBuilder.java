@@ -1368,11 +1368,18 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 		//   str?[]   → array of optional str   (ArrayType(OptionalType(str)))
 		//   str[]?   → optional array of str   (OptionalType(ArrayType(str)))
 		//   str?[]?  → optional array of optional str
+		//   str[512] → fixed-size array of str (ArrayType with sizeExpression)
 		for (var suffix : ctx.type_suffix())
 		{
 			if (suffix.rank_specifier() != null)
 			{
-				base = new ArrayType(span, base, 1);
+				var rankSpec = suffix.rank_specifier();
+				org.nebula.nebc.ast.expressions.Expression sizeExpr = null;
+				if (rankSpec.expression() != null)
+				{
+					sizeExpr = (org.nebula.nebc.ast.expressions.Expression) visit(rankSpec.expression());
+				}
+				base = new ArrayType(span, base, 1, sizeExpr);
 			}
 			else if (suffix.INTERR() != null)
 			{

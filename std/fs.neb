@@ -1,0 +1,169 @@
+namespace std::fs;
+use std::primitives;
+use std::strings;
+
+// =============================================================================
+// std::fs — File system operations for Nebula
+// =============================================================================
+//
+// This module provides safe, ergonomic file I/O built on top of raw Linux
+// syscalls.  No libc dependency.
+//
+// Design principles
+// ─────────────────
+// 1. Zero-cost:  File handles are integer file descriptors — no heap wrapper.
+// 2. CVT-safe:   All FFI calls use `keeps` where the runtime only reads,
+//                ensuring Nebula strings remain Valid after the call.
+// 3. Ergonomic:  High-level helpers (readAll, writeAll) for common patterns,
+//                plus a File struct for manual control.
+//
+// Quick usage
+// ───────────
+//   // One-shot read
+//   str contents = std::fs::readAll("config.toml");
+//
+//   // One-shot write
+//   std::fs::writeAll("output.txt", "Hello, Nebula!");
+//
+//   // Manual file handle
+//   File f = File.open("data.bin", FileMode.Read);
+//   if (f.isOpen())
+//   {
+//       str data = f.readStr(1024);
+//       f.close();
+//   }
+
+// =============================================================================
+// Seek origin constants
+// =============================================================================
+
+const i32 SEEK_SET = 0;
+const i32 SEEK_CUR = 1;
+const i32 SEEK_END = 2;
+
+// =============================================================================
+// File open mode
+// =============================================================================
+
+enum FileMode
+{
+    Read,
+    Write,
+    Append,
+    ReadWrite
+}
+
+// =============================================================================
+// FFI — C runtime file operations (implemented in runtime/core/fs.c)
+// =============================================================================
+
+private extern "C"
+{
+    i64 __nebula_rt_fs_open_read(keeps str path);
+    i64 __nebula_rt_fs_open_write(keeps str path);
+    i64 __nebula_rt_fs_open_append(keeps str path);
+    i64 __nebula_rt_fs_open_rw(keeps str path);
+    i32 __nebula_rt_fs_close(i64 fd);
+    i64 __nebula_rt_fs_read(i64 fd, keeps Ref<u8> buf, i64 count);
+    i64 __nebula_rt_fs_write(i64 fd, keeps Ref<u8> buf, i64 count);
+    i64 __nebula_rt_fs_write_str(i64 fd, keeps str s);
+    i64 __nebula_rt_fs_seek(i64 fd, i64 offset, i32 whence);
+    i64 __nebula_rt_fs_file_size(i64 fd);
+    i64 __nebula_rt_fs_path_size(keeps str path);
+    str __nebula_rt_fs_read_all(keeps str path);
+    str __nebula_rt_fs_read_str(i64 fd, i64 count);
+    i64 __nebula_rt_fs_write_all(keeps str path, keeps str content);
+    i32 __nebula_rt_fs_exists(keeps str path);
+}
+
+// =============================================================================
+// File — a lightweight handle around a file descriptor
+// =============================================================================
+//
+// File is a struct (value type).  It holds only an i64 fd — no heap
+// allocation.  Under CVT, the File itself has no Region to track;
+// the strings read from it are tracked normally.
+
+struct File
+{
+    i64 fd;
+
+    File(i64 fd)
+    {
+        this.fd = fd;
+    }
+
+    // -- Construction via static open methods ---------------------------------
+
+    static File open(keeps str path, FileMode mode)
+    {
+        i64 descriptor = match (mode)
+        {
+            Read      => __nebula_rt_fs_open_read(path),
+            Write     => __nebula_rt_fs_open_write(path),
+            Append    => __nebula_rt_fs_open_append(path),
+            ReadWrite => __nebula_rt_fs_open_rw(path)
+        };
+        return File(descriptor);
+    }
+
+    // -- Status ---------------------------------------------------------------
+
+    bool isOpen() => this.fd >= 0
+
+    // -- Reading --------------------------------------------------------------
+
+    // Read up to `count` bytes from the file.  Returns how many were read.
+    i64 read(keeps Ref<u8> buf, i64 count) => __nebula_rt_fs_read(this.fd, buf, count)
+
+    // Read up to `count` bytes as a Nebula str.
+    // Allocates a buffer, reads into it, returns the str.
+    // The caller owns the resulting str (CVT tracks it normally).
+    str readStr(i64 count) => __nebula_rt_fs_read_str(this.fd, count)
+
+    // Read the entire remaining content of the file as a str.
+    str readAll()
+    {
+        i64 size = __nebula_rt_fs_file_size(this.fd);
+        if (size <= 0) return "";
+        // Seek to beginning (SEEK_SET = 0), then read all
+        __nebula_rt_fs_seek(this.fd, 0, 0);
+        return __nebula_rt_fs_read_str(this.fd, size);
+    }
+
+    // -- Writing --------------------------------------------------------------
+
+    i64 writeStr(keeps str s) => __nebula_rt_fs_write_str(this.fd, s)
+
+    i64 write(keeps Ref<u8> buf, i64 count) => __nebula_rt_fs_write(this.fd, buf, count)
+
+    // -- Seeking --------------------------------------------------------------
+
+    i64 seek(i64 offset, i32 whence) => __nebula_rt_fs_seek(this.fd, offset, whence)
+
+    // -- Size -----------------------------------------------------------------
+
+    i64 size() => __nebula_rt_fs_file_size(this.fd)
+
+    // -- Closing --------------------------------------------------------------
+
+    i32 close() => __nebula_rt_fs_close(this.fd)
+}
+
+// =============================================================================
+// Free-standing convenience functions
+// =============================================================================
+
+// Read the entire contents of a file at `path` into a str.
+// Returns an empty str on failure.
+str readAll(keeps str path) => __nebula_rt_fs_read_all(path)
+
+// Write `content` to the file at `path`, creating or truncating it.
+// Returns the number of bytes written, or < 0 on error.
+i64 writeAll(keeps str path, keeps str content) => __nebula_rt_fs_write_all(path, content)
+
+// Check whether a file exists at `path`.
+bool exists(keeps str path) => __nebula_rt_fs_exists(path) != 0
+
+// Get the size in bytes of the file at `path`, or < 0 on error.
+i64 fileSize(keeps str path) => __nebula_rt_fs_path_size(path)

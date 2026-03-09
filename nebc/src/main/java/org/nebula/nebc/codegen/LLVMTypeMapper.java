@@ -68,9 +68,26 @@ public final class LLVMTypeMapper
 		{
 			return getOrCreateOptionalStructType(ctx, ot);
 		}
-		// Arrays are represented as opaque pointers (pointer to element type).
+		// Arrays: fixed-size arrays are inlined as [N x elemType], dynamic arrays
+		// are represented as opaque pointers (pointer to element type).
 		if (type instanceof ArrayType at)
 		{
+			if (at.elementCount > 0)
+			{
+				// Fixed-size array: inline [N x elemType]
+				// For struct base types, use the actual struct layout (not ptr)
+				// so that structs are stored inline by value in the array.
+				LLVMTypeRef elemType;
+				if (at.baseType instanceof org.nebula.nebc.semantic.types.StructType st)
+				{
+					elemType = getOrCreateStructType(ctx, st);
+				}
+				else
+				{
+					elemType = map(ctx, at.baseType);
+				}
+				return LLVMArrayType(elemType, at.elementCount);
+			}
 			return LLVMPointerTypeInContext(ctx, 0);
 		}
 		if (type instanceof CompositeType ct)
@@ -147,6 +164,20 @@ public final class LLVMTypeMapper
 		return LLVMPointerTypeInContext(ctx, 0);
 	}
 
+	/**
+	 * Returns the LLVM element type for a fixed-size array. For struct base types
+	 * this returns the actual named struct type (not ptr), so the array is
+	 * [N x %StructName] with inline values.
+	 */
+	public static LLVMTypeRef mapFixedArrayElementType(LLVMContextRef ctx, ArrayType at)
+	{
+		if (at.baseType instanceof org.nebula.nebc.semantic.types.StructType st)
+		{
+			return getOrCreateStructType(ctx, st);
+		}
+		return map(ctx, at.baseType);
+	}
+
 	private static final java.util.Map<String, LLVMTypeRef> structTypes = new java.util.HashMap<>();
 
 	public static LLVMTypeRef getOrCreateStructType(LLVMContextRef ctx, Type type)
@@ -196,7 +227,18 @@ public final class LLVMTypeMapper
 		LLVMTypeRef[] fieldTypesArr = new LLVMTypeRef[fields.size()];
 		for (int i = 0; i < fields.size(); i++)
 		{
-			fieldTypesArr[i] = map(ctx, fields.get(i).getType());
+			Type fieldType = fields.get(i).getType();
+			// Struct fields that are other struct types must be stored inline (value
+			// semantics), not as opaque pointers.  map() returns ptr for composites,
+			// so we special-case StructType to use the actual named struct layout.
+			if (fieldType instanceof org.nebula.nebc.semantic.types.StructType fieldSt)
+			{
+				fieldTypesArr[i] = getOrCreateStructType(ctx, fieldSt);
+			}
+			else
+			{
+				fieldTypesArr[i] = map(ctx, fieldType);
+			}
 		}
 
 		PointerPointer<LLVMTypeRef> fieldTypes = new PointerPointer<>(fieldTypesArr);
@@ -368,6 +410,15 @@ public final class LLVMTypeMapper
 		{
 			return 1 + estimateTypeSize(ctx, ot.innerType, visited); // i1 + inner
 		}
+		if (type instanceof ArrayType at)
+		{
+			if (at.elementCount > 0)
+			{
+				// Fixed-size array: N * element size
+				return at.elementCount * estimateTypeSize(ctx, at.baseType, visited);
+			}
+			return 8; // dynamic array = pointer-sized
+		}
 		// Default: pointer-sized (for classes, function pointers, etc.)
 		return 8;
 	}
@@ -410,13 +461,14 @@ public final class LLVMTypeMapper
 			return LLVMFunctionType(returnType, new LLVMTypeRef(), 0, /* isVarArg */ 0);
 		}
 		// Build the expanded LLVM parameter list.
-		// ArrayType parameters are expanded to (ptr, i64) to pass both the data
-		// pointer and the runtime element count as a fat-parameter pair.
+		// Dynamic array parameters (elementCount == 0) are expanded to (ptr, i64) to
+		// pass both the data pointer and the runtime element count as a fat-parameter pair.
+		// Fixed-size array parameters are passed as their inline [N x elemType] directly.
 		java.util.List<LLVMTypeRef> expanded = new java.util.ArrayList<>();
 		for (int i = 0; i < paramCount; i++)
 		{
 			expanded.add(map(ctx, ft.parameterTypes.get(i)));
-			if (ft.parameterTypes.get(i) instanceof ArrayType)
+			if (ft.parameterTypes.get(i) instanceof ArrayType at && at.elementCount == 0)
 			{
 				expanded.add(LLVMInt64TypeInContext(ctx));
 			}

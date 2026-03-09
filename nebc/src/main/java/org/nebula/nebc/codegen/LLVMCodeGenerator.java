@@ -685,10 +685,11 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				LLVMBuildStore(builder, paramValue, alloca);
 				namedValues.put(param.name(), alloca);
 
-				// Array parameters are expanded to (ptr, i64) in the LLVM ABI.
+				// Dynamic array parameters (elementCount == 0) are expanded to (ptr, i64) in the LLVM ABI.
 				// Bind the companion i64 length to a "__<name>_len" alloca so that
 				// member access ".len" and foreach can load it at runtime.
-				if (paramType instanceof ArrayType)
+				// Fixed-size arrays (elementCount > 0) are passed inline and have no companion length.
+				if (paramType instanceof ArrayType at && at.elementCount == 0)
 				{
 					LLVMValueRef lenValue = LLVMGetParam(function, llvmParamIdx++);
 					LLVMTypeRef i64t = LLVMInt64TypeInContext(context);
@@ -1717,9 +1718,15 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		// Structs are value types — returned by value (the LLVM struct type itself).
 		// The caller's function signature expects a struct aggregate, not a pointer.
-		if (retType instanceof StructType && srcType instanceof CompositeType)
+		if (retType instanceof StructType retSt && srcType instanceof CompositeType)
 		{
-			// The value is already a loaded struct aggregate — return it directly.
+			// Inline struct variables are stored as alloca pointers — we must load
+			// the aggregate value before returning.
+			if (LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMPointerTypeKind)
+			{
+				LLVMTypeRef structLlvmType = LLVMTypeMapper.getOrCreateStructType(context, retSt);
+				return LLVMBuildLoad2(builder, structLlvmType, value, "struct_ret_load");
+			}
 			return value;
 		}
 
@@ -2624,6 +2631,23 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			}
 
 			Type targetSemType = analyzer.getType(node.target);
+
+			// Struct value types: the alloca holds the full struct, not a pointer.
+			// We must store a struct value, not a pointer to one.
+			if (inlineStructVars.contains(idExpr.name) && targetSemType instanceof StructType st)
+			{
+				LLVMTypeRef structLlvmType = LLVMTypeMapper.getOrCreateStructType(context, st);
+				LLVMValueRef rhs = value;
+				// If the RHS is a pointer (e.g. another inline struct var / alloca),
+				// load the struct value through it first.
+				if (LLVMGetTypeKind(LLVMTypeOf(rhs)) == LLVMPointerTypeKind)
+				{
+					rhs = LLVMBuildLoad2(builder, structLlvmType, rhs, "struct_assign_load");
+				}
+				LLVMBuildStore(builder, rhs, pointer);
+				return rhs;
+			}
+
 			LLVMValueRef rhs = emitCast(value, analyzer.getType(node.value), targetSemType);
 			LLVMValueRef storeVal = emitCompoundRhs(pointer, targetSemType, node.operator, rhs);
 			LLVMBuildStore(builder, storeVal, pointer);
@@ -2664,12 +2688,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		}
 		else if (node.target instanceof IndexExpression indexExpr)
 		{
-			LLVMValueRef base = indexExpr.target.accept(this);
 			LLVMValueRef index = indexExpr.indices.get(0).accept(this);
 			Type baseType = analyzer.getType(indexExpr.target);
 
 			if (baseType == PrimitiveType.REF || baseType == PrimitiveType.STR)
 			{
+				LLVMValueRef base = indexExpr.target.accept(this);
 				LLVMValueRef[] indices = {index};
 				LLVMTypeRef elemType = LLVMInt8TypeInContext(context);
 				LLVMValueRef gep = LLVMBuildGEP2(builder, elemType, base, new PointerPointer<>(indices), 1, "ptr_idx");
@@ -2683,13 +2707,58 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 			if (baseType instanceof ArrayType at)
 			{
-				LLVMTypeRef elemType = toLLVMType(at.baseType);
-				LLVMValueRef[] indices = {index};
-				LLVMValueRef gep = LLVMBuildGEP2(builder, elemType, base, new PointerPointer<>(indices), 1, "arr_idx");
+				LLVMTypeRef elemType;
+				if (at.elementCount > 0)
+				{
+					elemType = LLVMTypeMapper.mapFixedArrayElementType(context, at);
+				}
+				else
+				{
+					elemType = toLLVMType(at.baseType);
+				}
+				LLVMValueRef gep;
+				if (at.elementCount > 0)
+				{
+					// Fixed-size array: need a pointer, not a loaded value
+					LLVMValueRef basePtr = emitPointer(indexExpr.target);
+					if (basePtr == null)
+					{
+						// Fallback: accept the value and store into a temporary alloca
+						LLVMValueRef val = indexExpr.target.accept(this);
+						LLVMTypeRef arrayType = LLVMArrayType(elemType, at.elementCount);
+						basePtr = LLVMBuildAlloca(builder, arrayType, "fixarr_tmp");
+						LLVMBuildStore(builder, val, basePtr);
+					}
+					LLVMTypeRef arrayType = LLVMArrayType(elemType, at.elementCount);
+					LLVMValueRef[] gepIndices = {
+						LLVMConstInt(LLVMInt64TypeInContext(context), 0, 0),
+						index
+					};
+					gep = LLVMBuildGEP2(builder, arrayType, basePtr,
+						new PointerPointer<>(gepIndices), 2, "fixarr_idx");
+				}
+				else
+				{
+					LLVMValueRef base = indexExpr.target.accept(this);
+					LLVMValueRef[] gepIndices = {index};
+					gep = LLVMBuildGEP2(builder, elemType, base,
+						new PointerPointer<>(gepIndices), 1, "arr_idx");
+				}
 
 				Type targetSemType = analyzer.getType(indexExpr);
 				LLVMValueRef rhs = emitCast(value, analyzer.getType(node.value), targetSemType);
 				LLVMValueRef storeVal = emitCompoundRhs(gep, targetSemType, node.operator, rhs);
+
+				// For struct elements in fixed-size arrays, the RHS is an alloca pointer
+				// but we need the struct value to store inline into the array slot.
+				if (at.elementCount > 0 && at.baseType instanceof org.nebula.nebc.semantic.types.StructType)
+				{
+					if (LLVMGetTypeKind(LLVMTypeOf(storeVal)) == LLVMPointerTypeKind)
+					{
+						storeVal = LLVMBuildLoad2(builder, elemType, storeVal, "struct_val_load");
+					}
+				}
+
 				LLVMBuildStore(builder, storeVal, gep);
 				return storeVal;
 			}
@@ -3128,12 +3197,13 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		int nebulaArgCount = node.arguments.size();
 		// The Nebula-level param count: used for 'this' detection.
 		int nebulaParamCount = ft.parameterTypes.size();
-		// Compute the expanded LLVM arg count: ArrayType params become (ptr, i64) pairs.
+		// Compute the expanded LLVM arg count: dynamic ArrayType params become (ptr, i64) pairs.
+		// Fixed-size array params are passed inline without a companion length.
 		int llvmArgCount = 0;
 		for (Type t : ft.parameterTypes)
 		{
 			llvmArgCount++;
-			if (t instanceof ArrayType) llvmArgCount++;
+			if (t instanceof ArrayType arrT && arrT.elementCount == 0) llvmArgCount++;
 		}
 
 		LLVMValueRef[] argsArr = new LLVMValueRef[llvmArgCount];
@@ -3190,8 +3260,9 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			// System.out.println("[DEBUG]   Arg " + i + ": " + argSemType.name() + " -> " + paramType.name());
 			argsArr[llvmArgIdx++] = emitCast(argValue, argSemType, paramType);
 
-			// ArrayType parameters are expanded to (ptr, i64): pass the companion length.
-			if (paramType instanceof ArrayType)
+			// Dynamic array parameters (elementCount == 0) are expanded to (ptr, i64):
+			// pass the companion length.  Fixed-size arrays are passed inline without a length.
+			if (paramType instanceof ArrayType arrParamType && arrParamType.elementCount == 0)
 			{
 				LLVMTypeRef i64t = LLVMInt64TypeInContext(context);
 				LLVMValueRef lenVal;
@@ -3471,21 +3542,29 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		}
 
 		// ── Array .len — runtime-count companion alloca ──────────────────────
-		if (baseType instanceof ArrayType && node.memberName.equals("len")
-				&& node.target instanceof IdentifierExpression targetId)
+		if (baseType instanceof ArrayType at && node.memberName.equals("len"))
 		{
-			String lenKey = "__" + targetId.name + "_len";
-			LLVMValueRef lenAlloca = namedValues.get(lenKey);
-			if (lenAlloca != null)
+			// Fixed-size arrays: the length is a compile-time constant
+			if (at.elementCount > 0)
 			{
-				return LLVMBuildLoad2(builder, LLVMInt64TypeInContext(context), lenAlloca,
-						targetId.name + "_len");
+				return LLVMConstInt(LLVMInt64TypeInContext(context), at.elementCount, 0);
 			}
-			// Compile-time known count (array literal)
-			Integer staticLen = arrayElementCounts.get(targetId.name);
-			if (staticLen != null)
+			// Dynamic arrays: look up the runtime companion alloca
+			if (node.target instanceof IdentifierExpression targetId)
 			{
-				return LLVMConstInt(LLVMInt64TypeInContext(context), staticLen, 0);
+				String lenKey = "__" + targetId.name + "_len";
+				LLVMValueRef lenAlloca = namedValues.get(lenKey);
+				if (lenAlloca != null)
+				{
+					return LLVMBuildLoad2(builder, LLVMInt64TypeInContext(context), lenAlloca,
+							targetId.name + "_len");
+				}
+				// Compile-time known count (array literal)
+				Integer staticLen = arrayElementCounts.get(targetId.name);
+				if (staticLen != null)
+				{
+					return LLVMConstInt(LLVMInt64TypeInContext(context), staticLen, 0);
+				}
 			}
 		}
 
@@ -3630,6 +3709,13 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				LLVMValueRef gep = emitMemberPointer(node);
 				if (gep != null)
 				{
+					// Struct-typed fields are stored inline — return the GEP pointer
+					// directly (like inline struct variables) so that chained member
+					// accesses (e.g. proj.package.name) GEP into the nested struct.
+					if (vs.getType() instanceof StructType)
+					{
+						return gep;
+					}
 					return LLVMBuildLoad2(builder, toLLVMType(vs.getType()), gep, node.memberName + "_load");
 				}
 			}
@@ -3760,15 +3846,32 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		}
 		else if (expr instanceof IndexExpression indexExpr)
 		{
-			LLVMValueRef base = indexExpr.target.accept(this);
 			LLVMValueRef index = indexExpr.indices.get(0).accept(this);
 			Type baseType = analyzer.getType(indexExpr.target);
 
 			if (baseType == PrimitiveType.REF || baseType == PrimitiveType.STR)
 			{
+				LLVMValueRef base = indexExpr.target.accept(this);
 				LLVMValueRef[] indices = {index};
 				LLVMTypeRef elemType = LLVMInt8TypeInContext(context);
 				return LLVMBuildGEP2(builder, elemType, base, new PointerPointer<>(indices), 1, "ptr_idx");
+			}
+
+			if (baseType instanceof ArrayType at && at.elementCount > 0)
+			{
+				// Fixed-size array: get a pointer to the array, then GEP into it
+				LLVMValueRef basePtr = emitPointer(indexExpr.target);
+				if (basePtr != null)
+				{
+					LLVMTypeRef elemType = LLVMTypeMapper.mapFixedArrayElementType(context, at);
+					LLVMTypeRef arrayType = LLVMArrayType(elemType, at.elementCount);
+					LLVMValueRef[] gepIndices = {
+						LLVMConstInt(LLVMInt64TypeInContext(context), 0, 0),
+						index
+					};
+					return LLVMBuildGEP2(builder, arrayType, basePtr,
+						new PointerPointer<>(gepIndices), 2, "fixarr_elem_ptr");
+				}
 			}
 		}
 		return null;
@@ -3843,12 +3946,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitIndexExpression(IndexExpression node)
 	{
-		LLVMValueRef base = node.target.accept(this);
 		LLVMValueRef index = node.indices.get(0).accept(this);
 		Type baseType = analyzer.getType(node.target);
 
 		if (baseType == PrimitiveType.REF || baseType == PrimitiveType.STR)
 		{
+			LLVMValueRef base = node.target.accept(this);
 			// Pointer indexing: GEP + Load
 			LLVMValueRef[] indices = {index};
 			LLVMTypeRef elemType = LLVMInt8TypeInContext(context);
@@ -3858,11 +3961,54 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		if (baseType instanceof ArrayType at)
 		{
-			// Array pointer indexing: GEP + Load
-			LLVMTypeRef elemType = toLLVMType(at.baseType);
-			LLVMValueRef[] indices = {index};
-			LLVMValueRef gep = LLVMBuildGEP2(builder, elemType, base, new PointerPointer<>(indices), 1, "arr_idx");
-			return LLVMBuildLoad2(builder, elemType, gep, "arr_load");
+			LLVMTypeRef elemType;
+			if (at.elementCount > 0)
+			{
+				elemType = LLVMTypeMapper.mapFixedArrayElementType(context, at);
+			}
+			else
+			{
+				elemType = toLLVMType(at.baseType);
+			}
+			if (at.elementCount > 0)
+			{
+				// Fixed-size array: we need the pointer to [N x elemType], not the loaded value.
+				// Use emitPointer to get the alloca/GEP pointer directly.
+				LLVMValueRef basePtr = emitPointer(node.target);
+				if (basePtr == null)
+				{
+					// Fallback: allocate on stack and store the value, then GEP into it
+					LLVMValueRef base = node.target.accept(this);
+					LLVMTypeRef arrayType = LLVMArrayType(elemType, at.elementCount);
+					LLVMValueRef alloca = LLVMBuildAlloca(builder, arrayType, "fixarr_tmp");
+					LLVMBuildStore(builder, base, alloca);
+					basePtr = alloca;
+				}
+				LLVMTypeRef arrayType = LLVMArrayType(elemType, at.elementCount);
+				LLVMValueRef[] indices = {
+					LLVMConstInt(LLVMInt64TypeInContext(context), 0, 0),
+					index
+				};
+				LLVMValueRef gep = LLVMBuildGEP2(builder, arrayType, basePtr,
+					new PointerPointer<>(indices), 2, "fixarr_idx");
+
+				// For struct elements, return the GEP pointer directly (like alloca for
+				// inline struct vars) so that member access via GEP still works.
+				if (at.baseType instanceof org.nebula.nebc.semantic.types.StructType)
+				{
+					return gep;
+				}
+				return LLVMBuildLoad2(builder, elemType, gep, "fixarr_load");
+			}
+			else
+			{
+				// Dynamic array pointer indexing: GEP + Load
+				LLVMValueRef base = node.target.accept(this);
+				LLVMValueRef[] indices = {index};
+				LLVMValueRef gep = LLVMBuildGEP2(builder, elemType, base,
+					new PointerPointer<>(indices), 1, "arr_idx");
+				return LLVMBuildLoad2(builder, elemType, gep, "arr_load");
+			}
 		}
 
 		throw new CodegenException("Indexing only supported on Ref/string/array types for now.");

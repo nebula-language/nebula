@@ -14,6 +14,10 @@ public class ArrayType extends Type
 	@Override
 	public String name()
 	{
+		if (elementCount > 0)
+		{
+			return baseType.name() + "[" + elementCount + "]";
+		}
 		return baseType.name() + "[]";
 	}
 

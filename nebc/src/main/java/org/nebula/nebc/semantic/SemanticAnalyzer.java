@@ -1020,7 +1020,18 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			Type elem = resolveTagMemberType(atn.baseType);
 			if (elem == Type.ERROR)
 				return Type.ERROR;
-			return new ArrayType(elem, 0);
+			int elementCount = 0;
+			if (atn.sizeExpression != null)
+			{
+				elementCount = evaluateConstantIntExpression(atn.sizeExpression);
+				if (elementCount <= 0)
+				{
+					error(DiagnosticCode.INTERNAL_ERROR, atn.sizeExpression,
+						"Fixed-size array length must be a positive integer constant.");
+					return Type.ERROR;
+				}
+			}
+			return new ArrayType(elem, elementCount);
 		}
 		if (astType instanceof org.nebula.nebc.ast.types.TupleType ttn)
 		{
@@ -1035,6 +1046,24 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			return new TupleType(elemTypes, ttn.fieldNames);
 		}
 		return Type.ANY;
+	}
+
+	/**
+	 * Evaluates a compile-time constant integer expression.
+	 * Currently supports integer literals only.  Returns -1 if the expression
+	 * cannot be evaluated as a positive constant.
+	 */
+	private int evaluateConstantIntExpression(org.nebula.nebc.ast.expressions.Expression expr)
+	{
+		if (expr instanceof org.nebula.nebc.ast.expressions.LiteralExpression lit
+			&& lit.type == org.nebula.nebc.ast.expressions.LiteralExpression.LiteralType.INT)
+		{
+			if (lit.value instanceof Number num)
+			{
+				return num.intValue();
+			}
+		}
+		return -1;
 	}
 
 	// =================================================================
@@ -3300,7 +3329,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		for (Expression index : node.indices)
 		{
 			Type idxType = index.accept(this);
-			if (!idxType.isAssignableTo(PrimitiveType.I32) && idxType != Type.ERROR)
+			if (!(idxType instanceof PrimitiveType pt && pt.isInteger()) && idxType != Type.ERROR)
 			{
 				error(DiagnosticCode.INDEX_NOT_INTEGER, index, idxType.name());
 			}
