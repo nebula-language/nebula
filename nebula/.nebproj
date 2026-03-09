@@ -1,5 +1,5 @@
 [package]
-name = "nebula-cli-tool"
+name = "nebula"
 version = "0.1.0"
 repository = "https://github.com/nebula-lang/nebula"
 description = "The official Nebula project management CLI."
@@ -9,6 +9,7 @@ license = "MIT"
 
 [dependencies]
 std = "0.1.0"
+toml = "0.0.1"
 
 [build]
 nebc = "nebc"

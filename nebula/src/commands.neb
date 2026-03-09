@@ -2,6 +2,7 @@ namespace nebula::cli;
 use std::io;
 use std::strings;
 use std::fs;
+use std::system;
 
 // =============================================================================
 // nebula::cli::commands — Command dispatch and handler stubs
@@ -44,47 +45,105 @@ i32 dispatch(keeps ParsedArgs parsed, keeps Project proj)
 
 i32 cmdInit(keeps ParsedArgs parsed)
 {
-    str projName = "my_project";
+    str projName = "";
+
     if (parsed.positionalCount > 0)
     {
         projName = parsed.positional[0];
     }
-
-    std::io::println($"Initializing new Nebula project: {projName}");
-
-    // Check if .nebproj already exists
-    if (std::fs::exists(".nebproj"))
+    else
     {
-        std::io::println("Error: .nebproj already exists in this directory.");
-        std::io::println("       Use a different directory or remove the existing file.");
+        std::io::print("Project name: ");
+        projName = std::io::readLine();
+    }
+
+    if (projName.length() == 0)
+    {
+        std::io::println("Error: project name cannot be empty.");
         return 1;
     }
 
-    // Generate a default .nebproj
-    str content = "[package]\n";
-    content = content.concat("name = \"").concat(projName).concat("\"\n");
-    content = content.concat("version = \"0.1.0\"\n");
-    content = content.concat("description = \"\"\n");
-    content = content.concat("type = \"bin\"\n");
-    content = content.concat("readme = \"README.md\"\n");
-    content = content.concat("license = \"MIT\"\n");
-    content = content.concat("\n");
-    content = content.concat("[dependencies]\n");
-    content = content.concat("std = \"0.1.0\"\n");
-    content = content.concat("\n");
-    content = content.concat("[build]\n");
-    content = content.concat("nebc = \"nebc\"\n");
-    content = content.concat("target = \"x86_64-unknown-linux-gnu\"\n");
-    content = content.concat("incremental = true\n");
+    // ── Guard: refuse to overwrite an existing project ────────────────────
 
-    std::fs::writeAll(".nebproj", content);
-    std::io::println("Created .nebproj");
+    str nebprojPath = projName.concat("/.nebproj");
+    if (std::fs::exists(nebprojPath))
+    {
+        std::io::println($"Error: directory '{projName}' already contains a .nebproj.");
+        std::io::println("       Choose a different name or remove the existing project.");
+        return 1;
+    }
 
-    // TODO: Create directory structure (src/, test/, README.md)
+    std::io::println($"Initializing new Nebula project: {projName}");
 
-    std::io::println("Done! Your project is ready.");
-    std::io::println("  Edit .nebproj to configure your project.");
-    std::io::println("  Run 'nebula build' to compile.");
+    // ── Create project root and subdirectories ────────────────────────────
+
+    if (std::system::mkdir(projName) != 0)
+    {
+        std::io::println($"Error: could not create directory '{projName}'.");
+        return 1;
+    }
+
+    str srcDir   = projName.concat("/src");
+    str libDir   = projName.concat("/lib");
+    str buildDir = projName.concat("/build");
+
+    std::system::mkdir(srcDir);
+    std::system::mkdir(libDir);
+    std::system::mkdir(buildDir);
+
+    std::io::println($"  Created {srcDir}/");
+    std::io::println($"  Created {libDir}/");
+    std::io::println($"  Created {buildDir}/");
+
+    // ── Generate .nebproj ─────────────────────────────────────────────────
+
+    str nebprojContent = "[package]\n";
+    nebprojContent = nebprojContent.concat("name = \"").concat(projName).concat("\"\n");
+    nebprojContent = nebprojContent.concat("version = \"0.1.0\"\n");
+    nebprojContent = nebprojContent.concat("description = \"\"\n");
+    nebprojContent = nebprojContent.concat("type = \"bin\"\n");
+    nebprojContent = nebprojContent.concat("readme = \"README.md\"\n");
+    nebprojContent = nebprojContent.concat("license = \"MIT\"\n");
+    nebprojContent = nebprojContent.concat("\n");
+    nebprojContent = nebprojContent.concat("[dependencies]\n");
+    nebprojContent = nebprojContent.concat("std = \"0.1.0\"\n");
+    nebprojContent = nebprojContent.concat("\n");
+    nebprojContent = nebprojContent.concat("[build]\n");
+    nebprojContent = nebprojContent.concat("nebc = \"nebc\"\n");
+    nebprojContent = nebprojContent.concat("target = \"x86_64-unknown-linux-gnu\"\n");
+    nebprojContent = nebprojContent.concat("incremental = true\n");
+
+    std::fs::writeAll(nebprojPath, nebprojContent);
+    std::io::println($"  Created {nebprojPath}");
+
+    // ── Generate README.md ────────────────────────────────────────────────
+
+    str readmePath    = projName.concat("/README.md");
+    str readmeContent = "# ".concat(projName).concat("\n\n");
+    readmeContent     = readmeContent.concat("A Nebula project.\n\n");
+    readmeContent     = readmeContent.concat("## Build\n\n");
+    readmeContent     = readmeContent.concat("```\n");
+    readmeContent     = readmeContent.concat("nebula build\n");
+    readmeContent     = readmeContent.concat("```\n");
+
+    std::fs::writeAll(readmePath, readmeContent);
+    std::io::println($"  Created {readmePath}");
+
+    // ── Generate stub src/main.neb ────────────────────────────────────────
+
+    str mainPath    = srcDir.concat("/main.neb");
+    str mainContent = "use std::io;\n\n";
+    mainContent     = mainContent.concat("i32 main(str[] args)\n{\n");
+    mainContent     = mainContent.concat("    std::io::println(\"Hello from ");
+    mainContent     = mainContent.concat(projName).concat("!\");\n");
+    mainContent     = mainContent.concat("    return 0;\n}\n");
+
+    std::fs::writeAll(mainPath, mainContent);
+    std::io::println($"  Created {mainPath}");
+
+    std::io::println("");
+    std::io::println($"Done! Project '{projName}' is ready.");
+    std::io::println($"  cd {projName} && nebula build");
     return 0;
 }
 
@@ -109,11 +168,79 @@ i32 cmdBuild(keeps ParsedArgs parsed, keeps Project proj)
         std::io::println($"  Jobs:     {proj.build.jobs}");
     }
 
-    // TODO: Invoke nebc with the appropriate flags
-    // TODO: Resolve and compile dependencies first
-    // TODO: Incremental build support
+    // ── Ensure build/ directory exists ───────────────────────────────────
 
-    std::io::println("  [stub] Build not yet implemented.");
+    std::system::mkdirAll("build");
+
+    // ── Assemble the nebc command ─────────────────────────────────────────
+    //
+    // Base form for a binary:
+    //   <nebc> src/ -o build/<name> -e main -t <target> [dep flags...]
+    //
+    // For a library:
+    //   <nebc> src/ -o build/<name> -B -t <target> [dep flags...]
+
+    str nebc   = proj.build.nebc;
+    str target = proj.build.target;
+    str name   = proj.package.name;
+    str ptype  = proj.package.projType;
+
+    str cmd = nebc.concat(" src/");
+
+    if (ptype.equals("lib"))
+    {
+        str outPath = "build/".concat(name);
+        cmd = cmd.concat(" -o ").concat(outPath);
+        cmd = cmd.concat(" -B");
+    }
+    else
+    {
+        str outPath = "build/".concat(name);
+        cmd = cmd.concat(" -o ").concat(outPath);
+        cmd = cmd.concat(" -e main");
+    }
+
+    if (target.length() > 0)
+    {
+        cmd = cmd.concat(" -t ").concat(target);
+    }
+
+    // ── Resolve and link each non-std dependency ──────────────────────────
+
+    for (i < proj.depCount)
+    {
+        str depName = proj.dependencies[i].name;
+
+        // std is linked automatically by nebc; skip it
+        if (depName.equals("std"))
+        {
+            continue;
+        }
+
+        str symPath = "lib/".concat(depName).concat("/").concat(depName).concat(".nebsym");
+        str libDir  = "lib/".concat(depName);
+
+        cmd = cmd.concat(" -s ").concat(symPath);
+        cmd = cmd.concat(" -L ").concat(libDir);
+        cmd = cmd.concat(" -l ").concat(depName);
+    }
+
+    if (parsed.verbose)
+    {
+        std::io::println($"  Command: {cmd}");
+    }
+
+    // ── Execute the build ─────────────────────────────────────────────────
+
+    i32 exitCode = std::system::exec(cmd);
+
+    if (exitCode != 0)
+    {
+        std::io::println($"Build failed (exit code {exitCode}).");
+        return exitCode;
+    }
+
+    std::io::println($"Built {name} -> build/{name}");
     return 0;
 }
 
@@ -137,10 +264,30 @@ i32 cmdRun(keeps ParsedArgs parsed, keeps Project proj)
 
     std::io::println($"Running {proj.package.name} v{proj.package.version}...");
 
-    // TODO: Build first, then execute the binary
+    // ── Build first ───────────────────────────────────────────────────────
 
-    std::io::println("  [stub] Run not yet implemented.");
-    return 0;
+    i32 buildResult = cmdBuild(parsed, proj);
+    if (buildResult != 0)
+    {
+        return buildResult;
+    }
+
+    // ── Execute the binary ────────────────────────────────────────────────
+
+    str binaryPath = "build/".concat(proj.package.name);
+
+    if (!std::fs::exists(binaryPath))
+    {
+        std::io::println($"Error: binary '{binaryPath}' not found after build.");
+        return 1;
+    }
+
+    if (parsed.verbose)
+    {
+        std::io::println($"  Executing: {binaryPath}");
+    }
+
+    return std::system::exec(binaryPath);
 }
 
 // =============================================================================
@@ -178,9 +325,28 @@ i32 cmdClean(keeps ParsedArgs parsed, keeps Project proj)
 
     std::io::println($"Cleaning {proj.package.name}...");
 
-    // TODO: Remove build output directory
+    str buildDir = "build";
 
-    std::io::println("  [stub] Clean not yet implemented.");
+    if (!std::fs::exists(buildDir))
+    {
+        std::io::println("Nothing to clean.");
+        return 0;
+    }
+
+    if (parsed.verbose)
+    {
+        std::io::println($"  Removing: {buildDir}/");
+    }
+
+    i32 result = std::system::rmAll(buildDir);
+
+    if (result != 0)
+    {
+        std::io::println($"Error: could not remove '{buildDir}' (code {result}).");
+        return 1;
+    }
+
+    std::io::println($"Cleaned {proj.package.name}: removed build/");
     return 0;
 }
 
