@@ -47,7 +47,12 @@ public enum DiagnosticCode
 	UNKNOWN_VARIANT("'%s' is not a variant of '%s'."),
 
 	// --- Use ---
-	USE_ITEM_NOT_FOUND("'%s' is not a member of '%s'.");
+	USE_ITEM_NOT_FOUND("'%s' is not a member of '%s'."),
+
+	// --- CVT (Causal Validity Tracking) ---
+	CVT_USE_AFTER_DROP("Variable '%s' used after its region was consumed by a 'drops' call."),
+	CVT_KEEPS_PARAM_PASSED_TO_DROPS("Parameter '%s' is declared 'keeps' but is being passed to a 'drops' function. This violates the caller's guarantee that the region will remain valid."),
+	BARE_FIELD_ACCESS("Field '%s' must be accessed via 'this.%s' inside a method body.");
 
 	private final String messageTemplate;
 

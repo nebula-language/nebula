@@ -21,8 +21,11 @@ import org.nebula.nebc.frontend.diagnostic.SourceSpan;
 import org.nebula.nebc.semantic.symbol.*;
 import org.nebula.nebc.semantic.types.*;
 
+import org.nebula.nebc.ast.CVTModifier;
+
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +60,153 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	 * prior impl and do not trigger false-positive overlap errors.
 	 */
 	private final java.util.Set<String> resolvedImplPairs = new java.util.HashSet<>();
+
+	// -------------------------------------------------------------------------
+	// CVT (Causal Validity Tracking) State Engine
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Maps each VariableSymbol (for class-typed variables) to a region ID.
+	 * Two symbols sharing the same region ID are aliases of the same heap region.
+	 * Reset at every method boundary via {@link #resetCvtState()}.
+	 */
+	private IdentityHashMap<VariableSymbol, Integer> symbolRegion = new IdentityHashMap<>();
+
+	/**
+	 * Tracks the validity of each region ID.
+	 * {@code true} = Valid (accessible), {@code false} = Invalid (consumed by a 'drops' call).
+	 */
+	private Map<Integer, Boolean> regionValid = new HashMap<>();
+
+	/** Monotonically increasing counter used to generate unique region IDs. */
+	private int nextRegionId = 0;
+
+	/**
+	 * When non-null, points to the direct LHS node of an assignment expression.
+	 * Used to suppress CVT validity checks when a variable is being reassigned
+	 * (the old region is being replaced, not read).
+	 */
+	private ASTNode assignmentTargetNode = null;
+
+	/**
+	 * The scope entered at the beginning of the current method body.
+	 * Used to distinguish "local" symbols (parameters, locals) from
+	 * type member fields that were captured via the member scope.
+	 * Reset alongside the other CVT state in {@link #resetCvtState()}.
+	 */
+	private SymbolTable currentMethodBoundaryScope = null;
+
+	/**
+	 * AST nodes for which a CVT error has already been emitted in the current
+	 * expression evaluation.  Prevents duplicate diagnostics when the same
+	 * argument identifier is visited twice (e.g. once for type inference and
+	 * once for type-checking in generic call sites).
+	 * Reset alongside the other CVT state in {@link #resetCvtState()}.
+	 */
+	private final java.util.Set<ASTNode> cvtReportedNodes =
+			java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+
+	/**
+	 * CVT modifiers of the current method's own parameters.
+	 * Maps each class-typed parameter's {@link VariableSymbol} to the
+	 * {@link CVTModifier} it was declared with ({@code keeps}, {@code drops}, etc.).
+	 * Used to detect when a {@code keeps}-annotated parameter is illegally passed
+	 * to a {@code drops} function inside the same method body.
+	 * Reset alongside the other CVT state in {@link #resetCvtState()}.
+	 */
+	private IdentityHashMap<VariableSymbol, CVTModifier> paramCvtModifiers = new IdentityHashMap<>();
+
+	/** Allocates a new, initially-valid region and returns its ID. */
+	private int newRegion()
+	{
+		int id = nextRegionId++;
+		regionValid.put(id, true);
+		return id;
+	}
+
+	/** Marks the region backing {@code sym} as Invalid (consumed). */
+	private void invalidateRegion(VariableSymbol sym)
+	{
+		Integer regionId = symbolRegion.get(sym);
+		if (regionId != null)
+			regionValid.put(regionId, false);
+	}
+
+	/**
+	 * Returns {@code true} if the backing region of {@code sym} is Valid or not yet tracked.
+	 * Returns {@code false} only when the region is explicitly Invalid.
+	 */
+	private boolean isRegionValid(VariableSymbol sym)
+	{
+		Integer regionId = symbolRegion.get(sym);
+		if (regionId == null)
+			return true; // Not tracked → assume valid
+		return regionValid.getOrDefault(regionId, true);
+	}
+
+	/**
+	 * Sets up the initial region for a newly declared class-typed variable.
+	 * If the initializer is a {@code new} expression, a fresh region is created.
+	 * If it is an identifier (alias), the region is shared with the source variable.
+	 */
+	private void trackNewVariableRegion(VariableSymbol targetSym, Expression initializer)
+	{
+		if (initializer instanceof NewExpression)
+		{
+			symbolRegion.put(targetSym, newRegion());
+		}
+		else
+		{
+			Symbol srcSym = nodeSymbols.get(initializer);
+			if (srcSym instanceof VariableSymbol srcVs)
+			{
+				Integer srcRegionId = symbolRegion.get(srcVs);
+				symbolRegion.put(targetSym, srcRegionId != null ? srcRegionId : newRegion());
+			}
+			else
+			{
+				symbolRegion.put(targetSym, newRegion());
+			}
+		}
+	}
+
+	/**
+	 * Resets the per-method CVT tracking state.
+	 * Must be called at the beginning of every method body analysis so that
+	 * regions from one method do not bleed into another.
+	 */
+	/**
+	 * Resolves {@code name} by searching only within the current method body:
+	 * walks up from {@code currentScope} stopping at (and including)
+	 * {@code currentMethodBoundaryScope}. Returns {@code null} if not found
+	 * within that range — indicating the name comes from the type member scope
+	 * (i.e. it is a bare field access).
+	 */
+	private Symbol resolveInMethodScope(String name)
+	{
+		if (currentMethodBoundaryScope == null)
+			return null;
+		SymbolTable s = currentScope;
+		while (s != null)
+		{
+			Symbol sym = s.resolveLocal(name);
+			if (sym != null)
+				return sym;
+			if (s == currentMethodBoundaryScope)
+				break; // Don't walk above the method boundary
+			s = s.getParent();
+		}
+		return null;
+	}
+
+	private void resetCvtState()
+	{
+		symbolRegion = new IdentityHashMap<>();
+		regionValid = new HashMap<>();
+		paramCvtModifiers = new IdentityHashMap<>();
+		cvtReportedNodes.clear();
+		currentMethodBoundaryScope = null;
+	}
 
 	public SemanticAnalyzer(CompilerConfig config)
 	{
@@ -1342,7 +1492,12 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			}
 		}
 
+		// Reset CVT tracking for this fresh method body so regions from a
+		// previous method's analysis do not bleed into this one.
+		resetCvtState();
+
 		enterScope(); // Body scope
+		currentMethodBoundaryScope = currentScope; // Mark method entry boundary for CVT
 		Type prevRet = currentMethodReturnType;
 		currentMethodReturnType = returnType;
 
@@ -1354,6 +1509,18 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			if (!currentScope.define(paramSym))
 			{
 				error(DiagnosticCode.DUPLICATE_PARAMETER, node, param.name());
+			}
+			// CVT: Class-typed parameters arrive with a live region at method entry.
+			// Give each one a fresh, valid region ID so that drops calls inside the
+			// body can invalidate it and subsequent uses can be detected.
+			if (pType instanceof ClassType)
+			{
+				symbolRegion.put(paramSym, newRegion());
+				// Record CVT modifier so we can detect keeps-vs-drops violations.
+				if (param.cvtModifier() != null && param.cvtModifier() != CVTModifier.NONE)
+				{
+					paramCvtModifiers.put(paramSym, param.cvtModifier());
+				}
 			}
 			// Check default value type if present
 			if (param.defaultValue() != null)
@@ -1386,6 +1553,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		}
 
 		currentMethodReturnType = prevRet;
+		currentMethodBoundaryScope = null; // Leaving method body
 		exitScope();
 		if (outerScope != null)
 		{
@@ -1447,6 +1615,11 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				if (!currentScope.define(varSym))
 				{
 					error(DiagnosticCode.DUPLICATE_SYMBOL, node, decl.name());
+				}
+				// CVT: Track the backing region for class-typed variables.
+				if (actualType instanceof ClassType && decl.hasInitializer())
+				{
+					trackNewVariableRegion(varSym, decl.initializer());
 				}
 			}
 		}
@@ -1955,8 +2128,10 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 					Type concrete = sub.substitute(tpt);
 					typeArgs.add(concrete);
 
-					// Validate bounds (trait or tag)
-					if (tpt.getBound() != null)
+					// Validate bounds (trait or tag). Skip when concrete is already the
+					// error sentinel — this suppresses cascading errors that occur when an
+					// argument resolved to Type.ERROR due to a prior CVT violation.
+					if (tpt.getBound() != null && concrete != Type.ERROR)
 					{
 						if (tpt.getBound() instanceof TraitType traitBound)
 						{
@@ -2010,6 +2185,11 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				for (int i = 0; i < effectiveArgs.size(); i++)
 				{
 					Type argType = effectiveArgs.get(i).accept(this);
+					// Suppress cascading type errors: if the argument already resolved
+					// to the error sentinel (e.g. after a CVT use-after-drop report),
+					// do not emit a redundant argument-type-mismatch error.
+					if (argType == Type.ERROR)
+						continue;
 					Type paramType = fn.parameterTypes.get(i);
 					if (!argType.isAssignableTo(paramType))
 					{
@@ -2031,6 +2211,52 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		}
 
 		recordType(node, result);
+		// CVT: If this invocation targets a function/method whose parameter
+		// has a CVT modifier 'drops' and the corresponding argument is a
+		// variable, mark the variable's region as invalidated.
+		//
+		// pinfos may contain a leading implicit 'this' parameter that is not
+		// present in node.arguments (which only contains the explicit call-site
+		// arguments). Compute the offset so the indices are properly aligned.
+		if (fn != null && fn.isExternFunction())
+		{
+			List<ParameterInfo> pinfos = fn.getParameterInfos();
+			int paramOffset = pinfos.size() - node.arguments.size();
+			if (paramOffset < 0)
+				paramOffset = 0;
+			for (int pi = paramOffset; pi < pinfos.size(); pi++)
+			{
+				ParameterInfo info = pinfos.get(pi);
+				if (info != null && info.isDrops())
+				{
+					int argIdx = pi - paramOffset;
+					if (argIdx >= node.arguments.size())
+						continue;
+					Expression arg = node.arguments.get(argIdx);
+					if (arg instanceof IdentifierExpression argId)
+					{
+						Symbol symArg = currentScope.resolve(argId.name);
+						if (symArg instanceof VariableSymbol vsArg)
+						{
+							// Don't invalidate if we're currently assigning to that variable
+							if (assignmentTargetNode instanceof IdentifierExpression at
+									&& at.name.equals(argId.name))
+								continue;
+							// CVT contract check: a 'keeps'-annotated parameter of the
+							// current method cannot be passed to a 'drops' function,
+							// because that would violate the caller's guarantee that the
+							// region will remain valid when this method returns.
+							if (paramCvtModifiers.get(vsArg) == CVTModifier.KEEPS)
+							{
+								error(DiagnosticCode.CVT_KEEPS_PARAM_PASSED_TO_DROPS, arg, argId.name);
+							}
+							invalidateRegion(vsArg);
+						}
+					}
+				}
+			}
+		}
+
 		return result;
 	}
 
@@ -2199,6 +2425,38 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			error(DiagnosticCode.UNDEFINED_SYMBOL, node, node.name);
 			return Type.ERROR;
 		}
+
+		if (sym instanceof VariableSymbol vs)
+		{
+			// CVT check: use-after-drop — only fire once per AST node to avoid
+			// duplicate diagnostics from args being visited twice in generic calls.
+			if (!isRegionValid(vs) && !cvtReportedNodes.contains(node))
+			{
+				// If this identifier is the direct target of an assignment, allow it
+				// (the old region is being replaced, not read).
+				if (!(assignmentTargetNode instanceof IdentifierExpression at
+						&& at.name.equals(node.name)))
+				{
+					cvtReportedNodes.add(node);
+					error(DiagnosticCode.CVT_USE_AFTER_DROP, node, node.name);
+					return Type.ERROR;
+				}
+			}
+
+			// Bare field access check: inside a method body, fields of the enclosing
+			// type must be accessed via 'this.fieldName', not bare.
+			// We detect this when the symbol resolves only by leaving the method's own
+			// scope chain — i.e. it is NOT found in the method boundary scope or below.
+			if (currentTypeDefinition != null && currentMethodBoundaryScope != null
+					&& vs.getType() != currentTypeDefinition // 'this' itself is fine
+					&& !(sym.getDeclarationNode() instanceof MethodDeclaration)
+					&& resolveInMethodScope(node.name) == null)
+			{
+				error(DiagnosticCode.BARE_FIELD_ACCESS, node, node.name, node.name);
+				return Type.ERROR;
+			}
+		}
+
 		recordSymbol(node, sym);
 		Type result = sym.getType();
 		recordType(node, result);
@@ -2234,8 +2492,14 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	@Override
 	public Type visitAssignmentExpression(AssignmentExpression node)
 	{
+		// For CVT purposes, remember the LHS so we can suppress use-after-drop checks
+		assignmentTargetNode = node.target;
+
 		Type targetType = node.target.accept(this);
 		Type valueType = node.value.accept(this);
+
+		// Clear LHS sentinel
+		assignmentTargetNode = null;
 
 		if (targetType == Type.ERROR || valueType == Type.ERROR)
 			return Type.ERROR;
@@ -2245,6 +2509,36 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			error(DiagnosticCode.TYPE_MISMATCH, node, targetType.name(), valueType.name());
 			return Type.ERROR;
 		}
+
+		// If assigning a class-typed variable, and RHS is a drops/consuming call,
+		// the old region should be invalidated (LUA). Handle simple identifier LHS here.
+		if (node.target instanceof IdentifierExpression id && valueType instanceof ClassType)
+		{
+			Symbol sym = currentScope.resolve(id.name);
+			if (sym instanceof VariableSymbol vs && vs.getType() instanceof ClassType)
+			{
+				// If RHS expression is a NewExpression, assign a fresh region
+				if (node.value instanceof NewExpression)
+				{
+					trackNewVariableRegion(vs, node.value);
+				}
+				else if (node.value instanceof IdentifierExpression srcId)
+				{
+					Symbol srcSym = currentScope.resolve(srcId.name);
+					if (srcSym instanceof VariableSymbol srcVs)
+					{
+						Integer srcRegion = symbolRegion.get(srcVs);
+						symbolRegion.put(vs, srcRegion != null ? srcRegion : newRegion());
+					}
+				}
+				else
+				{
+					// Conservative: create a fresh region
+					symbolRegion.put(vs, newRegion());
+				}
+			}
+		}
+
 		recordType(node, targetType);
 		return targetType;
 	}
