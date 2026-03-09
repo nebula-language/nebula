@@ -1,0 +1,269 @@
+namespace nebula::cli;
+use std::io;
+use std::strings;
+use toml;
+use std::fs;
+
+// =============================================================================
+// nebula::cli::project — .nebproj file representation and loader
+// =============================================================================
+//
+// Defines the structure of a Nebula project as declared in a `.nebproj` file.
+// Provides loading and validation of project configuration.
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const i32 MAX_DEPENDENCIES = 128;
+
+// =============================================================================
+// Dependency — a single dependency entry
+// =============================================================================
+
+struct Dependency
+{
+    str name;
+    str version;
+    str git;         // if specified via inline table { git = "..." }
+    bool isGitDep;
+}
+
+// =============================================================================
+// PackageConfig — the [package] section
+// =============================================================================
+
+struct PackageConfig
+{
+    str name;
+    str version;
+    str repository;
+    str description;
+    str projType;    // "bin" or "lib"
+    str readme;
+    str license;
+    bool publish;
+    bool useStd;
+}
+
+// =============================================================================
+// BuildConfig — the [build] section
+// =============================================================================
+
+struct BuildConfig
+{
+    str jobs;
+    str nebc;
+    str target;
+    bool incremental;
+}
+
+// =============================================================================
+// Project — the complete parsed .nebproj
+// =============================================================================
+
+struct Project
+{
+    PackageConfig package;
+    BuildConfig build;
+    Dependency[128] dependencies;
+    i64 depCount;
+    bool valid;
+    str error;
+}
+
+// =============================================================================
+// loadProject — parse a .nebproj file into a Project struct
+// =============================================================================
+
+Project loadProject(keeps str path)
+{
+    Project proj;
+    proj.valid = false;
+    proj.depCount = 0;
+    proj.error = "";
+
+    // Check if file exists
+    if (!std::fs::exists(path))
+    {
+        proj.error = "Project file not found";
+        return proj;
+    }
+
+    // Read the file
+    str content = std::fs::readAll(path);
+    if (content.length() == 0)
+    {
+        proj.error = "Project file is empty or unreadable";
+        return proj;
+    }
+
+    // Parse as TOML
+    toml::TomlDoc doc = toml::parse(content);
+    if (!doc.valid)
+    {
+        proj.error = doc.error;
+        return proj;
+    }
+
+    // ── [package] section ────────────────────────────────────────────────
+
+    proj.package.name        = doc.getString("package", "name");
+    proj.package.version     = doc.getString("package", "version");
+    proj.package.repository  = doc.getString("package", "repository");
+    proj.package.description = doc.getString("package", "description");
+    proj.package.projType    = doc.getString("package", "type");
+    proj.package.readme      = doc.getString("package", "readme");
+    proj.package.license     = doc.getString("package", "license");
+
+    // publish defaults to true
+    if (doc.hasKey("package", "publish"))
+    {
+        proj.package.publish = doc.getBool("package", "publish");
+    }
+    else
+    {
+        proj.package.publish = true;
+    }
+
+    // use_std defaults to true
+    if (doc.hasKey("package", "use_std"))
+    {
+        proj.package.useStd = doc.getBool("package", "use_std");
+    }
+    else
+    {
+        proj.package.useStd = true;
+    }
+
+    // Validate required fields
+    if (proj.package.name.length() == 0)
+    {
+        proj.error = "Missing required field: package.name";
+        return proj;
+    }
+    if (proj.package.version.length() == 0)
+    {
+        proj.error = "Missing required field: package.version";
+        return proj;
+    }
+    if (proj.package.projType.length() == 0)
+    {
+        proj.error = "Missing required field: package.type";
+        return proj;
+    }
+
+    // ── [build] section ──────────────────────────────────────────────────
+
+    proj.build.jobs   = doc.getString("build", "jobs");
+    proj.build.nebc   = doc.getString("build", "nebc");
+    proj.build.target = doc.getString("build", "target");
+
+    if (doc.hasKey("build", "incremental"))
+    {
+        proj.build.incremental = doc.getBool("build", "incremental");
+    }
+    else
+    {
+        proj.build.incremental = false;
+    }
+
+    // Default nebc to "nebc" if not specified
+    if (proj.build.nebc.length() == 0)
+    {
+        proj.build.nebc = "nebc";
+    }
+
+    // ── [dependencies] section ───────────────────────────────────────────
+
+    // Iterate doc.entries directly to find dependencies.
+    // (Fixed-size arrays are value types in Nebula, so getKeys' output
+    //  parameter cannot propagate results back to the caller.)
+    i64 depIdx = 0;
+    for (ei < doc.count)
+    {
+        if (!doc.entries[(i32)ei].section.equals("dependencies"))
+        {
+            continue;
+        }
+
+        str depKey = doc.entries[(i32)ei].key;
+
+        // Skip sub-keys from inline tables (e.g. "name.git")
+        if (depKey.contains("."))
+        {
+            continue;
+        }
+
+        // Check if this is a git dep (inline table creates "name.git" key)
+        str gitKey = depKey.concat(".git");
+        if (doc.hasKey("dependencies", gitKey))
+        {
+            proj.dependencies[depIdx].name = depKey;
+            proj.dependencies[depIdx].git = doc.getString("dependencies", gitKey);
+            proj.dependencies[depIdx].version = "";
+            proj.dependencies[depIdx].isGitDep = true;
+            depIdx = depIdx + 1;
+        }
+        else
+        {
+            // Regular version dependency
+            proj.dependencies[depIdx].name = depKey;
+            proj.dependencies[depIdx].version = doc.entries[(i32)ei].value;
+            proj.dependencies[depIdx].git = "";
+            proj.dependencies[depIdx].isGitDep = false;
+            depIdx = depIdx + 1;
+        }
+
+        if (depIdx >= MAX_DEPENDENCIES) break;
+    }
+    proj.depCount = depIdx;
+
+    proj.valid = true;
+    return proj;
+}
+
+// =============================================================================
+// printProject — diagnostic dump of a loaded project
+// =============================================================================
+
+void printProject(keeps Project proj)
+{
+    if (!proj.valid)
+    {
+        std::io::println($"Error: {proj.error}");
+        return;
+    }
+
+    std::io::println("=== Nebula Project ===");
+    std::io::println($"  Name:        {proj.package.name}");
+    std::io::println($"  Version:     {proj.package.version}");
+    std::io::println($"  Type:        {proj.package.projType}");
+    std::io::println($"  Description: {proj.package.description}");
+    std::io::println($"  License:     {proj.package.license}");
+    std::io::println($"  Repository:  {proj.package.repository}");
+
+    if (proj.build.target.length() > 0)
+    {
+        std::io::println($"  Target:      {proj.build.target}");
+    }
+
+    if (proj.depCount > 0)
+    {
+        std::io::println("");
+        std::io::println("  Dependencies:");
+        for (i < proj.depCount)
+        {
+            if (proj.dependencies[i].isGitDep)
+            {
+                std::io::println($"    {proj.dependencies[i].name} (git: {proj.dependencies[i].git})");
+            }
+            else
+            {
+                std::io::println($"    {proj.dependencies[i].name} = {proj.dependencies[i].version}");
+            }
+        }
+    }
+
+    std::io::println("======================");
+}

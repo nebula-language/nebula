@@ -1,0 +1,259 @@
+namespace nebula::cli;
+use std::io;
+use std::strings;
+use std::fs;
+
+// =============================================================================
+// nebula::cli::commands — Command dispatch and handler stubs
+// =============================================================================
+//
+// Each command handler receives the ParsedArgs and the loaded Project (if
+// applicable).  Commands that don't need a project (like `init` and `help`)
+// ignore the project parameter.
+
+// =============================================================================
+// Version info
+// =============================================================================
+
+const str NEBULA_CLI_VERSION = "0.1.0";
+const str NEBULA_CLI_NAME    = "nebula";
+
+// =============================================================================
+// dispatch — route a parsed command to its handler
+// =============================================================================
+
+i32 dispatch(keeps ParsedArgs parsed, keeps Project proj)
+{
+    return match (parsed.command)
+    {
+        Init    => cmdInit(parsed),
+        Build   => cmdBuild(parsed, proj),
+        Run     => cmdRun(parsed, proj),
+        Test    => cmdTest(parsed, proj),
+        Clean   => cmdClean(parsed, proj),
+        Deps    => cmdDeps(parsed, proj),
+        Help    => cmdHelp(parsed),
+        Version => cmdVersion(parsed),
+        Unknown => 1
+    };
+}
+
+// =============================================================================
+// cmdInit — initialize a new Nebula project
+// =============================================================================
+
+i32 cmdInit(keeps ParsedArgs parsed)
+{
+    str projName = "my_project";
+    if (parsed.positionalCount > 0)
+    {
+        projName = parsed.positional[0];
+    }
+
+    std::io::println($"Initializing new Nebula project: {projName}");
+
+    // Check if .nebproj already exists
+    if (std::fs::exists(".nebproj"))
+    {
+        std::io::println("Error: .nebproj already exists in this directory.");
+        std::io::println("       Use a different directory or remove the existing file.");
+        return 1;
+    }
+
+    // Generate a default .nebproj
+    str content = "[package]\n";
+    content = content.concat("name = \"").concat(projName).concat("\"\n");
+    content = content.concat("version = \"0.1.0\"\n");
+    content = content.concat("description = \"\"\n");
+    content = content.concat("type = \"bin\"\n");
+    content = content.concat("readme = \"README.md\"\n");
+    content = content.concat("license = \"MIT\"\n");
+    content = content.concat("\n");
+    content = content.concat("[dependencies]\n");
+    content = content.concat("std = \"0.1.0\"\n");
+    content = content.concat("\n");
+    content = content.concat("[build]\n");
+    content = content.concat("nebc = \"nebc\"\n");
+    content = content.concat("target = \"x86_64-unknown-linux-gnu\"\n");
+    content = content.concat("incremental = true\n");
+
+    std::fs::writeAll(".nebproj", content);
+    std::io::println("Created .nebproj");
+
+    // TODO: Create directory structure (src/, test/, README.md)
+
+    std::io::println("Done! Your project is ready.");
+    std::io::println("  Edit .nebproj to configure your project.");
+    std::io::println("  Run 'nebula build' to compile.");
+    return 0;
+}
+
+// =============================================================================
+// cmdBuild — build the current project
+// =============================================================================
+
+i32 cmdBuild(keeps ParsedArgs parsed, keeps Project proj)
+{
+    if (!proj.valid)
+    {
+        std::io::println($"Error: {proj.error}");
+        return 1;
+    }
+
+    std::io::println($"Building {proj.package.name} v{proj.package.version}...");
+
+    if (parsed.verbose)
+    {
+        std::io::println($"  Compiler: {proj.build.nebc}");
+        std::io::println($"  Target:   {proj.build.target}");
+        std::io::println($"  Jobs:     {proj.build.jobs}");
+    }
+
+    // TODO: Invoke nebc with the appropriate flags
+    // TODO: Resolve and compile dependencies first
+    // TODO: Incremental build support
+
+    std::io::println("  [stub] Build not yet implemented.");
+    return 0;
+}
+
+// =============================================================================
+// cmdRun — build and run the current project
+// =============================================================================
+
+i32 cmdRun(keeps ParsedArgs parsed, keeps Project proj)
+{
+    if (!proj.valid)
+    {
+        std::io::println($"Error: {proj.error}");
+        return 1;
+    }
+
+    if (!proj.package.projType.equals("bin"))
+    {
+        std::io::println("Error: 'nebula run' is only valid for binary projects (type = \"bin\").");
+        return 1;
+    }
+
+    std::io::println($"Running {proj.package.name} v{proj.package.version}...");
+
+    // TODO: Build first, then execute the binary
+
+    std::io::println("  [stub] Run not yet implemented.");
+    return 0;
+}
+
+// =============================================================================
+// cmdTest — run project tests
+// =============================================================================
+
+i32 cmdTest(keeps ParsedArgs parsed, keeps Project proj)
+{
+    if (!proj.valid)
+    {
+        std::io::println($"Error: {proj.error}");
+        return 1;
+    }
+
+    std::io::println($"Testing {proj.package.name} v{proj.package.version}...");
+
+    // TODO: Discover and run test files
+    // TODO: Use the reflection-based test runner from std::reflect
+
+    std::io::println("  [stub] Test not yet implemented.");
+    return 0;
+}
+
+// =============================================================================
+// cmdClean — remove build artifacts
+// =============================================================================
+
+i32 cmdClean(keeps ParsedArgs parsed, keeps Project proj)
+{
+    if (!proj.valid)
+    {
+        std::io::println($"Error: {proj.error}");
+        return 1;
+    }
+
+    std::io::println($"Cleaning {proj.package.name}...");
+
+    // TODO: Remove build output directory
+
+    std::io::println("  [stub] Clean not yet implemented.");
+    return 0;
+}
+
+// =============================================================================
+// cmdDeps — manage project dependencies
+// =============================================================================
+
+i32 cmdDeps(keeps ParsedArgs parsed, keeps Project proj)
+{
+    if (!proj.valid)
+    {
+        std::io::println($"Error: {proj.error}");
+        return 1;
+    }
+
+    std::io::println($"Dependencies for {proj.package.name}:");
+    for (i < proj.depCount)
+    {
+        if (proj.dependencies[i].isGitDep)
+        {
+            std::io::println($"  {proj.dependencies[i].name} (git: {proj.dependencies[i].git})");
+        }
+        else
+        {
+            std::io::println($"  {proj.dependencies[i].name} = {proj.dependencies[i].version}");
+        }
+    }
+
+    if (proj.depCount == 0)
+    {
+        std::io::println("  (no dependencies)");
+    }
+
+    // TODO: Add/remove/update dependency subcommands
+
+    return 0;
+}
+
+// =============================================================================
+// cmdHelp — display help information
+// =============================================================================
+
+i32 cmdHelp(keeps ParsedArgs parsed)
+{
+    std::io::println($"Nebula CLI v{NEBULA_CLI_VERSION}");
+    std::io::println("");
+    std::io::println("Usage: nebula <command> [options]");
+    std::io::println("");
+    std::io::println("Commands:");
+    std::io::println("  init [name]   Initialize a new Nebula project");
+    std::io::println("  build         Build the current project");
+    std::io::println("  run           Build and run the current project");
+    std::io::println("  test          Run project tests");
+    std::io::println("  clean         Remove build artifacts");
+    std::io::println("  deps          List and manage dependencies");
+    std::io::println("  help          Show this help message");
+    std::io::println("  version       Show version information");
+    std::io::println("");
+    std::io::println("Options:");
+    std::io::println("  --verbose           Enable verbose output");
+    std::io::println("  --dry-run           Show what would be done without doing it");
+    std::io::println("  --project-file <p>  Use a custom .nebproj file path");
+    std::io::println("  -h, --help          Show help");
+    std::io::println("  -v, --version       Show version");
+    return 0;
+}
+
+// =============================================================================
+// cmdVersion — display version
+// =============================================================================
+
+i32 cmdVersion(keeps ParsedArgs parsed)
+{
+    std::io::println($"nebula {NEBULA_CLI_VERSION}");
+    return 0;
+}

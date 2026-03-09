@@ -1,0 +1,69 @@
+namespace nebula::cli;
+use std::io;
+use std::fs;
+
+// =============================================================================
+// nebula — The Nebula project management CLI
+// =============================================================================
+//
+// Entry point for the `nebula` executable.  This binary is the official tool
+// for initializing, building, testing, and managing Nebula projects.
+//
+// The tool reads a `.nebproj` file (TOML format) from the current directory
+// and dispatches to the appropriate command handler.
+//
+// Usage:
+//   nebula init my_project
+//   nebula build
+//   nebula run
+//   nebula test
+//   nebula deps
+//   nebula help
+
+i32 main(str[] args)
+{
+    // Parse command-line arguments
+    ParsedArgs parsed = parseArgs(args);
+
+    // Commands that don't need a project file
+    Project emptyProj;
+    emptyProj.valid = false;
+    emptyProj.error = "";
+    emptyProj.depCount = 0;
+
+    if (parsed.command == Command.Help ||
+        parsed.command == Command.Version ||
+        parsed.command == Command.Init ||
+        parsed.command == Command.Unknown)
+    {
+        return dispatch(parsed, emptyProj);
+    }
+
+    // All other commands require loading the project file
+    str projFile = parsed.projectFile;
+
+    if (!std::fs::exists(projFile))
+    {
+        std::io::println($"Error: No .nebproj file found at '{projFile}'.");
+        std::io::println("  Run 'nebula init' to create a new project, or");
+        std::io::println("  use '--project-file <path>' to specify a different location.");
+        return 1;
+    }
+
+    // Load and parse the project
+    Project proj = loadProject(projFile);
+
+    if (!proj.valid)
+    {
+        std::io::println($"Error loading project: {proj.error}");
+        return 1;
+    }
+
+    if (parsed.verbose)
+    {
+        printProject(proj);
+    }
+
+    // Dispatch to the command handler
+    return dispatch(parsed, proj);
+}

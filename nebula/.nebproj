@@ -1,0 +1,16 @@
+[package]
+name = "nebula-cli-tool"
+version = "0.1.0"
+repository = "https://github.com/nebula-lang/nebula"
+description = "The official Nebula project management CLI."
+type = "bin"
+readme = "README.md"
+license = "MIT"
+
+[dependencies]
+std = "0.1.0"
+
+[build]
+nebc = "nebc"
+target = "x86_64-unknown-linux-gnu"
+incremental = true

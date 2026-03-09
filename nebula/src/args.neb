@@ -1,0 +1,141 @@
+namespace nebula::cli;
+use std::io;
+use std::strings;
+
+// =============================================================================
+// nebula::cli::args — Command-line argument parser
+// =============================================================================
+//
+// Parses the argv array into a structured command + flags representation.
+//
+// Usage model:
+//   nebula <command> [flags...]
+//
+// Supported commands (stubs):
+//   init     — Initialize a new project
+//   build    — Build the current project
+//   run      — Build and run the current project
+//   test     — Run tests
+//   clean    — Clean build artifacts
+//   deps     — Manage dependencies
+//   help     — Show help information
+//   version  — Show version information
+
+// =============================================================================
+// Command enum
+// =============================================================================
+
+enum Command
+{
+    Init,
+    Build,
+    Run,
+    Test,
+    Clean,
+    Deps,
+    Help,
+    Version,
+    Unknown
+}
+
+// =============================================================================
+// ParsedArgs — the result of argument parsing
+// =============================================================================
+
+const i32 MAX_FLAGS = 32;
+
+struct ParsedArgs
+{
+    Command command;
+    str commandStr;          // raw command string for error messages
+    str[32] flags;           // --flag or -f style arguments
+    i64 flagCount;
+    str[32] positional;      // remaining positional arguments
+    i64 positionalCount;
+    str projectFile;         // override for --project-file <path>
+    bool verbose;
+    bool dryRun;
+}
+
+// =============================================================================
+// parseArgs — parse argv into ParsedArgs
+// =============================================================================
+
+ParsedArgs parseArgs(str[] args)
+{
+    ParsedArgs result;
+    result.command = Command.Help;
+    result.commandStr = "help";
+    result.flagCount = 0;
+    result.positionalCount = 0;
+    result.projectFile = ".nebproj";
+    result.verbose = false;
+    result.dryRun = false;
+
+    // args[0] is the program name, skip it
+    if (args.len <= 1) return result;
+
+    // First non-flag argument is the command
+    i64 idx = 1;
+
+    // Parse the command
+    str cmd = args[idx];
+    idx = idx + 1;
+
+    if (cmd.equals("init"))         { result.command = Command.Init; }
+    else if (cmd.equals("build"))   { result.command = Command.Build; }
+    else if (cmd.equals("run"))     { result.command = Command.Run; }
+    else if (cmd.equals("test"))    { result.command = Command.Test; }
+    else if (cmd.equals("clean"))   { result.command = Command.Clean; }
+    else if (cmd.equals("deps"))    { result.command = Command.Deps; }
+    else if (cmd.equals("help"))    { result.command = Command.Help; }
+    else if (cmd.equals("--help"))  { result.command = Command.Help; }
+    else if (cmd.equals("-h"))      { result.command = Command.Help; }
+    else if (cmd.equals("version")) { result.command = Command.Version; }
+    else if (cmd.equals("--version")) { result.command = Command.Version; }
+    else if (cmd.equals("-v"))      { result.command = Command.Version; }
+    else
+    {
+        result.command = Command.Unknown;
+    }
+    result.commandStr = cmd;
+
+    // Parse remaining args as flags or positional
+    while (idx < args.len)
+    {
+        str arg = args[idx];
+        idx = idx + 1;
+
+        if (arg.equals("--verbose"))
+        {
+            result.verbose = true;
+        }
+        else if (arg.equals("--dry-run"))
+        {
+            result.dryRun = true;
+        }
+        else if (arg.equals("--project-file") && idx < args.len)
+        {
+            result.projectFile = args[idx];
+            idx = idx + 1;
+        }
+        else if (arg.startsWith("--") || arg.startsWith("-"))
+        {
+            if (result.flagCount < MAX_FLAGS)
+            {
+                result.flags[result.flagCount] = arg;
+                result.flagCount = result.flagCount + 1;
+            }
+        }
+        else
+        {
+            if (result.positionalCount < MAX_FLAGS)
+            {
+                result.positional[result.positionalCount] = arg;
+                result.positionalCount = result.positionalCount + 1;
+            }
+        }
+    }
+
+    return result;
+}
