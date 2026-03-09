@@ -1,0 +1,88 @@
+namespace std::system;
+
+// =============================================================================
+// std::system — process spawning and directory operations
+// =============================================================================
+//
+// Provides synchronous command execution (via /bin/sh -c) and file-system
+// helpers for creating and removing directory trees.  No libc dependency:
+// all operations go through raw Linux syscalls in the runtime.
+//
+// Quick usage
+// ───────────
+//   // Run a shell command and check the exit code
+//   i32 code = std::system::exec("nebc src/ -o build/app");
+//   if (code != 0)
+//   {
+//       std::io::println("Build failed!");
+//   }
+//
+//   // Create a directory tree
+//   std::system::mkdirAll("build/obj");
+//
+//   // Wipe an entire directory
+//   std::system::rmAll("build/");
+//
+//   // Get the current working directory
+//   str cwd = std::system::getCwd();
+
+// =============================================================================
+// FFI — C runtime implementations (in runtime/core/system.c)
+// =============================================================================
+
+private extern "C"
+{
+    i32 __nebula_rt_system_exec(keeps str cmd);
+    i32 __nebula_rt_system_mkdir(keeps str path);
+    i32 __nebula_rt_system_mkdir_all(keeps str path);
+    i32 __nebula_rt_system_rm_all(keeps str path);
+    str __nebula_rt_system_getcwd();
+}
+
+// =============================================================================
+// exec — run a shell command synchronously
+// =============================================================================
+//
+// Forks a child process, executes `cmd` via `/bin/sh -c`, and waits for it
+// to finish.
+//
+// Returns the exit code of the command (0 = success), or -1 on fork/exec
+// failure.
+
+i32 exec(keeps str cmd) => __nebula_rt_system_exec(cmd)
+
+// =============================================================================
+// mkdir — create a single directory
+// =============================================================================
+//
+// Creates the directory at `path` with mode 0755.
+// Returns 0 on success, or a negative error code.
+
+i32 mkdir(keeps str path) => __nebula_rt_system_mkdir(path)
+
+// =============================================================================
+// mkdirAll — create a directory and all missing parents
+// =============================================================================
+//
+// Equivalent to `mkdir -p`.  Silently succeeds if the directory already
+// exists.  Returns 0 on success, or a negative error code on the first
+// failure.
+
+i32 mkdirAll(keeps str path) => __nebula_rt_system_mkdir_all(path)
+
+// =============================================================================
+// rmAll — recursively remove a path (file or directory tree)
+// =============================================================================
+//
+// Equivalent to `rm -rf`.  Returns 0 on success, or a negative error code.
+
+i32 rmAll(keeps str path) => __nebula_rt_system_rm_all(path)
+
+// =============================================================================
+// getCwd — return the current working directory
+// =============================================================================
+//
+// Returns the absolute path of the current working directory as a str.
+// Returns an empty str on failure.
+
+str getCwd() => __nebula_rt_system_getcwd()

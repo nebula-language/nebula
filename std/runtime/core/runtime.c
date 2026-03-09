@@ -3,6 +3,7 @@
 // Forward declarations from platform-specific syscalls
 extern long sys_write(int fd, const void* buf, long count);
 extern void* neb_alloc(uint64_t size);
+extern void  neb_free(void* ptr);
 
 // Utility function to get length of null-terminated string
 static int32_t __nebula_strlen(const uint8_t* str)
@@ -353,6 +354,53 @@ NebulaStr* __nebula_build_argv(int32_t argc, const uint8_t** argv)
         result[i] = (NebulaStr){ s, len };
     }
     return result;
+}
+
+// ---------------------------------------------------------
+// stdin readline
+// ---------------------------------------------------------
+
+// Read syscall forward declaration (implemented in linux_fs_syscalls.c)
+extern long sys_read(int fd, void* buf, long count);
+
+/**
+ * Read one line from stdin (fd 0), stripping the trailing newline.
+ * Returns an empty str on EOF or error.
+ */
+NebulaStr __nebula_rt_io_read_line(void)
+{
+    // Read one byte at a time until '\n' or EOF.
+    // Initial capacity: 128 bytes, doubled as needed.
+    uint64_t cap = 128;
+    uint8_t* buf = (uint8_t*)neb_alloc(cap);
+    if (!buf) return (NebulaStr){ (const uint8_t*)"", 0 };
+
+    int64_t len = 0;
+    uint8_t ch = 0;
+
+    while (1)
+    {
+        long n = sys_read(0, &ch, 1);
+        if (n <= 0) break;          // EOF or error
+        if (ch == '\n') break;      // end of line
+
+        // Grow buffer if needed
+        if ((uint64_t)(len + 1) >= cap)
+        {
+            uint64_t new_cap = cap * 2;
+            uint8_t* new_buf = (uint8_t*)neb_alloc(new_cap);
+            if (!new_buf) break;
+            for (int64_t i = 0; i < len; i++) new_buf[i] = buf[i];
+            neb_free(buf);
+            buf = new_buf;
+            cap = new_cap;
+        }
+
+        buf[len++] = ch;
+    }
+
+    buf[len] = '\0';
+    return (NebulaStr){ buf, len };
 }
 
 // ---------------------------------------------------------
