@@ -132,9 +132,8 @@ i32 cmdInit(keeps ParsedArgs parsed)
     // ── Generate stub src/main.neb ────────────────────────────────────────
 
     str mainPath    = srcDir.concat("/main.neb");
-    str mainContent = "use std::io;\n\n";
-    mainContent     = mainContent.concat("i32 main(str[] args)\n{\n");
-    mainContent     = mainContent.concat("    std::io::println(\"Hello from ");
+    str mainContent     = "i32 main(str[] args)\n{\n";
+    mainContent     = mainContent.concat("    println(\"Hello from ");
     mainContent     = mainContent.concat(projName).concat("!\");\n");
     mainContent     = mainContent.concat("    return 0;\n}\n");
 
