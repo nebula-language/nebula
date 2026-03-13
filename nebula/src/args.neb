@@ -82,6 +82,22 @@ ParsedArgs parseArgs(str[] args)
     str cmd = args[idx];
     idx = idx + 1;
 
+    use Command::*;
+
+    result.command = match (cmd)
+    {
+        "init" => Init,
+        "build" => Build,
+        "run" => Run,
+        "test" => Test,
+        "clean" => Clean,
+        "deps" => Deps,
+        "help" | "--help" | "-h" => Help,
+        "version" | "--version" | "-v" => Version,
+        _ => Unknown
+    };
+
+    /*
     if (cmd.equals("init"))         { result.command = Command.Init; }
     else if (cmd.equals("build"))   { result.command = Command.Build; }
     else if (cmd.equals("run"))     { result.command = Command.Run; }
@@ -98,6 +114,7 @@ ParsedArgs parseArgs(str[] args)
     {
         result.command = Command.Unknown;
     }
+    */
     result.commandStr = cmd;
 
     // Parse remaining args as flags or positional
