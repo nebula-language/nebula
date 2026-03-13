@@ -1,0 +1,79 @@
+[[1;34mINFO[m] Scanning for projects...
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--------------------------< [0;36morg.nebula:nebc[0;1m >---------------------------[m
+[[1;34mINFO[m] [1mBuilding Nebula Compiler 0.0.1-prealpha[m
+[[1;34mINFO[m] [1m--------------------------------[ jar ]---------------------------------[m
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--- [0;32mmaven-clean-plugin:2.5:clean[m [1m(default-clean)[m @ [36mnebc[0;1m ---[m
+[[1;34mINFO[m] Deleting /home/juanpa/dev/nebula/nebc/target
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m>>> [0;32mnative-maven-plugin:0.10.2:compile[m [1m(default-cli)[0;1m > [0;1mpackage[m @ [36mnebc[0;1m >>>[m
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--- [0;32mantlr4-maven-plugin:4.13.1:antlr4[m [1m(default)[m @ [36mnebc[0;1m ---[m
+[[1;34mINFO[m] No grammars to process
+[[1;34mINFO[m] ANTLR 4: Processing source directory /home/juanpa/dev/nebula/nebc/src/main/antlr4
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--- [0;32mmaven-resources-plugin:2.6:resources[m [1m(default-resources)[m @ [36mnebc[0;1m ---[m
+[[1;34mINFO[m] Using 'UTF-8' encoding to copy filtered resources.
+[[1;34mINFO[m] Copying 7 resources
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--- [0;32mmaven-compiler-plugin:3.13.0:compile[m [1m(default-compile)[m @ [36mnebc[0;1m ---[m
+[[1;34mINFO[m] Recompiling the module because of [1mchanged source code[m.
+[[1;34mINFO[m] Compiling 134 source files with javac [debug release 21] to target/classes
+[[1;34mINFO[m] /home/juanpa/dev/nebula/nebc/src/main/java/org/nebula/nebc/codegen/LLVMCodeGenerator.java: Some input files use or override a deprecated API.
+[[1;34mINFO[m] /home/juanpa/dev/nebula/nebc/src/main/java/org/nebula/nebc/codegen/LLVMCodeGenerator.java: Recompile with -Xlint:deprecation for details.
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--- [0;32mmaven-resources-plugin:2.6:testResources[m [1m(default-testResources)[m @ [36mnebc[0;1m ---[m
+[[1;34mINFO[m] Using 'UTF-8' encoding to copy filtered resources.
+[[1;34mINFO[m] Copying 3 resources
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--- [0;32mmaven-compiler-plugin:3.13.0:testCompile[m [1m(default-testCompile)[m @ [36mnebc[0;1m ---[m
+[[1;34mINFO[m] Recompiling the module because of [1mchanged dependency[m.
+[[1;34mINFO[m] Compiling 1 source file with javac [debug release 21] to target/test-classes
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--- [0;32mmaven-surefire-plugin:3.2.5:test[m [1m(default-test)[m @ [36mnebc[0;1m ---[m
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--- [0;32mmaven-jar-plugin:2.4:jar[m [1m(default-jar)[m @ [36mnebc[0;1m ---[m
+[[1;34mINFO[m] Building jar: /home/juanpa/dev/nebula/nebc/target/nebc-0.0.1-prealpha.jar
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m<<< [0;32mnative-maven-plugin:0.10.2:compile[m [1m(default-cli)[0;1m < [0;1mpackage[m @ [36mnebc[0;1m <<<[m
+[[1;34mINFO[m] 
+[[1;34mINFO[m] 
+[[1;34mINFO[m] [1m--- [0;32mnative-maven-plugin:0.10.2:compile[m [1m(default-cli)[m @ [36mnebc[0;1m ---[m
+[[1;34mINFO[m] Found GraalVM installation from JAVA_HOME variable.
+[[1;34mINFO[m] Downloaded GraalVM reachability metadata repository from file:/home/juanpa/.m2/repository/org/graalvm/buildtools/graalvm-reachability-metadata/0.10.2/graalvm-reachability-metadata-0.10.2-repository.zip
+[[1;34mINFO[m] Executing: /home/juanpa/.sdkman/candidates/java/current/bin/native-image -cp /home/juanpa/dev/nebula/nebc/target/classes:/home/juanpa/.m2/repository/org/antlr/antlr4-runtime/4.13.1/antlr4-runtime-4.13.1.jar:/home/juanpa/.m2/repository/org/bytedeco/llvm/20.1.7-1.5.12/llvm-20.1.7-1.5.12.jar:/home/juanpa/.m2/repository/org/bytedeco/javacpp/1.5.12/javacpp-1.5.12.jar:/home/juanpa/.m2/repository/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar:/home/juanpa/.m2/repository/org/bytedeco/llvm/20.1.7-1.5.12/llvm-20.1.7-1.5.12-linux-x86_64.jar:/home/juanpa/.m2/repository/org/bytedeco/javacpp/1.5.12/javacpp-1.5.12-linux-x86_64.jar --no-fallback -o /home/juanpa/dev/nebula/nebc/target/nebc -H:+JNI org.nebula.Main
+Warning: The option '-H:+JNI' is experimental and must be enabled via '-H:+UnlockExperimentalVMOptions' in the future.
+Warning: Please re-evaluate whether any experimental option is required, and either remove or unlock it. The build output lists all active experimental options, including where they come from and possible alternatives. If you think an experimental option should be considered as stable, please file an issue.
+========================================================================================================================
+GraalVM Native Image: Generating 'nebc' (executable)...
+========================================================================================================================
+For detailed information and explanations on the build output, visit:
+https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/BuildOutput.md
+------------------------------------------------------------------------------------------------------------------------
+[1/8] Initializing...                                                                                    (8.5s @ 0.07GB)
+ Java version: 21.0.2+13, vendor version: GraalVM CE 21.0.2+13.1
+ Graal compiler: optimization level: 2, target machine: x86-64-v3
+ C compiler: gcc (linux, x86_64, 13.3.0)
+ Garbage collector: Serial GC (max heap size: 80% of RAM)
+ 1 user-specific feature(s):
+ - com.oracle.svm.thirdparty.gson.GsonFeature
+------------------------------------------------------------------------------------------------------------------------
+ 1 experimental option(s) unlocked:
+ - '-H:+JNI' (origin(s): command line)
+------------------------------------------------------------------------------------------------------------------------
+Build resources:
+ - 2.84GB of memory (75.6% of 3.76GB system memory, determined at start)
+ - 4 thread(s) (100.0% of 4 available processor(s), determined at start)
+[2/8] Performing analysis...  [*****]                                                                   (83.8s @ 1.39GB)
+    5,282 reachable types   (79.9% of    6,608 total)
+    6,183 reachable fields  (48.0% of   12,871 total)
+   27,246 reachable methods (50.8% of   53,625 total)
+    1,839 types,   213 fields, and 1,982 methods registered for reflection
+      295 types,   127 fields, and   977 methods registered for JNI access
+        4 native libraries: dl, pthread, rt, z
+[3/8] Building universe...                                                                               (6.9s @ 1.58GB)
+[4/8] Parsing methods...      [***]                                                                      (8.5s @ 1.65GB)
+[5/8] Inlining methods...     [***]                                                                     (18.4s @ 1.28GB)
+[6/8] Compiling methods...    [*******]                                                                 (57.5s @ 1.49GB)
+[7/8] Layouting methods...    [**]                                                                       (2.9s @ 1.80GB)

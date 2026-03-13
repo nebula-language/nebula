@@ -77,19 +77,30 @@
             </plugin>
 
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>21</release>
+                </configuration>
+            </plugin>
+
+            <plugin>
                 <groupId>org.graalvm.buildtools</groupId>
                 <artifactId>native-maven-plugin</artifactId>
                 <version>0.10.2</version>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>compile</goal>
-                        </goals>
-                    </execution>
-                </executions>
+                <extensions>true</extensions>
                 <configuration>
                     <mainClass>org.nebula.Main</mainClass>
                     <imageName>nebc</imageName>
+                    <buildArgs>
+                        <!-- Enable JNI (needed for LLVM + JavaCPP) -->
+                        <buildArg>-H:+JNI</buildArg>
+                        <!-- Unlock experimental VM options -->
+                        <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+                        <!-- Limit JVM heap used by native-image compilation to avoid OOM -->
+                        <buildArg>-J-Xmx4G</buildArg>
+                    </buildArgs>
                 </configuration>
             </plugin>
 
