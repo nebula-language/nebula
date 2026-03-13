@@ -3082,6 +3082,121 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		{
 			checkTupleExhaustiveness(node, tt);
 		}
+		else if (selectorType == PrimitiveType.STR
+				|| selectorType == PrimitiveType.I8  || selectorType == PrimitiveType.U8
+				|| selectorType == PrimitiveType.I16 || selectorType == PrimitiveType.U16
+				|| selectorType == PrimitiveType.I32 || selectorType == PrimitiveType.U32
+				|| selectorType == PrimitiveType.I64 || selectorType == PrimitiveType.U64
+				|| selectorType == PrimitiveType.BOOL
+				|| selectorType == PrimitiveType.CHAR)
+		{
+			checkLiteralExhaustiveness(node, selectorType);
+		}
+	}
+
+	/**
+	 * Checks exhaustiveness for literal types (bool, integers, str, char).
+	 * <ul>
+	 *   <li>{@code bool}  — exhaustive when both {@code true} and {@code false} are covered.</li>
+	 *   <li>{@code i8}/{@code u8} — exhaustive when all 256 values are explicitly listed.</li>
+	 *   <li>{@code i16}/{@code u16} — exhaustive when all 65 536 values are explicitly listed.</li>
+	 *   <li>All other types — require a wildcard {@code _} arm.</li>
+	 * </ul>
+	 */
+	private void checkLiteralExhaustiveness(MatchExpression node, Type selectorType)
+	{
+		// A wildcard arm always makes any match exhaustive.
+		for (MatchArm arm : node.arms)
+		{
+			if (isWildcardArm(arm.pattern))
+				return;
+		}
+
+		// Collect every literal value covered by the arms (flattening OrPatterns).
+		Set<Object> coveredLiterals = new LinkedHashSet<>();
+		for (MatchArm arm : node.arms)
+		{
+			collectLiterals(arm.pattern, coveredLiterals);
+		}
+
+		// --- bool: finite domain {true, false} ---
+		if (selectorType == PrimitiveType.BOOL)
+		{
+			boolean hasTrue  = coveredLiterals.contains(Boolean.TRUE);
+			boolean hasFalse = coveredLiterals.contains(Boolean.FALSE);
+			if (hasTrue && hasFalse)
+				return; // exhaustive
+			String missing = (!hasTrue && !hasFalse) ? "true, false"
+					: !hasTrue ? "true" : "false";
+			error(DiagnosticCode.NON_EXHAUSTIVE_MATCH, node, selectorType.name(), missing);
+			return;
+		}
+
+		// --- small integer types: enumerate their domain ---
+		long domainMin;
+		long domainMax;
+		boolean smallDomain;
+		switch (selectorType.name())
+		{
+			case "i8"  -> { domainMin = Byte.MIN_VALUE;   domainMax = Byte.MAX_VALUE;   smallDomain = true;  }
+			case "u8"  -> { domainMin = 0;                domainMax = 255;              smallDomain = true;  }
+			case "i16" -> { domainMin = Short.MIN_VALUE;  domainMax = Short.MAX_VALUE;  smallDomain = true;  }
+			case "u16" -> { domainMin = 0;                domainMax = 65535;            smallDomain = true;  }
+			default    -> { domainMin = 0; domainMax = 0; smallDomain = false; }
+		}
+
+		if (smallDomain)
+		{
+			// For small integer types, check if all values in [domainMin, domainMax] are covered.
+			Set<Long> coveredInts = new LinkedHashSet<>();
+			for (Object v : coveredLiterals)
+			{
+				if (v instanceof Long l)
+					coveredInts.add(l);
+				else if (v instanceof Integer i)
+					coveredInts.add((long) i);
+			}
+
+			List<String> missingValues = new ArrayList<>();
+			for (long val = domainMin; val <= domainMax; val++)
+			{
+				if (!coveredInts.contains(val))
+				{
+					missingValues.add(String.valueOf(val));
+					if (missingValues.size() > 5)
+					{
+						missingValues.add("...");
+						break;
+					}
+				}
+			}
+			if (missingValues.isEmpty())
+				return; // exhaustive
+			error(DiagnosticCode.NON_EXHAUSTIVE_MATCH, node,
+					selectorType.name(), String.join(", ", missingValues));
+			return;
+		}
+
+		// --- everything else (str, char, i32, u32, i64, u64, …) ---
+		// The domain is too large to enumerate; only a wildcard can make it exhaustive.
+		error(DiagnosticCode.NON_EXHAUSTIVE_MATCH, node, selectorType.name(), "_");
+	}
+
+	/**
+	 * Collects all literal values reachable from {@code pat} into {@code out}.
+	 * Recurses into {@link OrPattern} alternatives.
+	 */
+	private void collectLiterals(Pattern pat, Set<Object> out)
+	{
+		if (pat instanceof LiteralPattern lp && lp.value != null)
+		{
+			out.add(lp.value.value);
+		}
+		else if (pat instanceof OrPattern op)
+		{
+			for (Pattern alt : op.alternatives)
+				collectLiterals(alt, out);
+		}
 	}
 
 	/**
