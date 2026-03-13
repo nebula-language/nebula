@@ -6,19 +6,12 @@ Use the Allman style for all languages, e.g.: Java, Nebula, etc.
 
 Every time, before coding, read thoroughly these files ./cvt.md (Which defines the Nebula language core philosophy and paradigm) and ./spec/revised/full.neb which is a example of all of the Nebula language features, both semantically and syntactically. So you completely understand Neubla's intended direction and scope.
 
-When recompiling the nebc compiler use `compilenebc` a fish alias made for convenience:
-function compilenebc
-    cd /home/juanpa/dev/nebula/nebc/
-    /bin/sh /home/juanpa/apps/idea/plugins/maven/lib/maven3/bin/mvn -Didea.version=2025.2.6 -Dmaven.ext.class.path=/home/juanpa/apps/idea/plugins/maven/lib/maven-event-listener.jar -Djansi.passthrough=true -Dstyle.color=always -Dmaven.repo.local=/home/juanpa/.m2/repository package -f pom.xml
-end
-
-Keep in mind that after that, the updated nebc binary inst in the path, so you have to use the path to the compiled binary, which is /home/juanpa/dev/nebula/nebc/target/nebc
-
-If you need to use maven, use this path:/home/juanpa/apps/idea/plugins/maven/lib/maven3/bin/mvnas maven isnt globally installed
+When recompiling the nebc compiler, ensure you're in the correct path ./nebula/nebc/:
+  - For testing / verifying / iterating you can simply do `mvn compile` (as its faster) and then simply execute it with Java.
+  - The way to get the native image is with `mvn package`. That does generate a native binary at nebc/target/nebc. That's symlinked to `/usr/local/bin/nebc` so it'll be automatically updated in the path.
 
 To compile the standard library (std/) with nebc, use these flags:
-◄ nebula   0s ◎
-nebnebc --library std/ -o neb --nostdlib     
-to ensure that it doesnt try to link with itself, which will cause redefinition errors.
+`nebc --library std/ -o neb --nostdlib` or the appropiate respective `java ...` command if testing with the .jar image.
+--nostdlib is essential to ensure that it doesnt try to link with itself, which will cause redefinition errors.
 
 Finally, acknowledge that your gonna be using fish, so you have to live up to its quirks, mainly syntactical differences from regular sh / bash and the use of $status instead of $0. If needed use /bin/bash everytime, e.g.: prepending every command with it
