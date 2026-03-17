@@ -1,0 +1,55 @@
+namespace std::collections;
+
+// =============================================================================
+// std::collections::traits — core collection trait definitions
+// =============================================================================
+//
+// Traits here define the contracts that collection types must satisfy.
+// They are intentionally minimal: each trait carries only the methods that
+// belong strictly to its responsibility, keeping implementors focused.
+
+// -----------------------------------------------------------------------------
+// Hashable — anything that can produce a deterministic hash code
+// -----------------------------------------------------------------------------
+
+trait Hashable
+{
+    // Returns a hash code for this value.  Equal values must return equal hashes.
+    i64 hashCode();
+}
+
+// -----------------------------------------------------------------------------
+// Equatable — value equality (distinct from identity)
+// -----------------------------------------------------------------------------
+
+trait Equatable
+{
+    // Returns true when this value is structurally equal to `other`.
+    bool equals(Ref other);
+}
+
+// -----------------------------------------------------------------------------
+// Collection — read-only view common to all collection types
+// -----------------------------------------------------------------------------
+
+trait Collection
+{
+    // Number of elements currently stored.
+    i64 size();
+
+    // True when size() == 0.
+    bool isEmpty();
+
+    // Remove all elements, resetting the collection to an empty state.
+    void clear();
+}
+
+// -----------------------------------------------------------------------------
+// Indexable — random access by integer position
+// -----------------------------------------------------------------------------
+
+trait Indexable
+{
+    // Number of elements accessible via [].
+    i64 size();
+}

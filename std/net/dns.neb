@@ -1,0 +1,34 @@
+namespace std::net;
+
+use std::net::ffi;
+use std::net::core;
+
+// =============================================================================
+// std::net::dns — minimal DNS name resolution
+// =============================================================================
+//
+// Currently provides a single helper for resolving a hostname to its first
+// IPv4 address.  The implementation delegates to the libc getaddrinfo shim in
+// the runtime (std/runtime/core/net.c).
+//
+// Note
+// ────
+// DNS resolution may block the calling thread for as long as the OS DNS stack
+// takes.  For non-blocking use, resolve addresses ahead of time or spawn a
+// separate thread.
+
+private extern "C"
+{
+    // Resolve `hostname` to an IPv4 address string (dotted decimal).
+    // Returns an empty str on failure.
+    str neb_net_resolve(keeps str hostname);
+}
+
+// Resolve a hostname to its first IPv4 address as a dotted-decimal str.
+// Returns null when resolution fails.
+str? resolve(keeps str hostname)
+{
+    str addr = neb_net_resolve(hostname);
+    if (addr.length() == 0) return none;
+    return addr;
+}

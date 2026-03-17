@@ -1,0 +1,60 @@
+namespace std::net;
+
+// =============================================================================
+// std::net::constants — protocol constants and option flags
+// =============================================================================
+//
+// These match the Linux kernel ABI constants.  They are safe to use directly
+// in syscall arguments without any conversion.
+
+// Address families
+const i32 AF_UNSPEC = 0;
+const i32 AF_INET   = 2;
+const i32 AF_INET6  = 10;
+
+// Socket types
+const i32 SOCK_STREAM    = 1;    // TCP
+const i32 SOCK_DGRAM     = 2;    // UDP
+const i32 SOCK_NONBLOCK  = 2048; // O_NONBLOCK flag for accept4 / socket
+const i32 SOCK_CLOEXEC   = 524288;
+
+// Protocols
+const i32 IPPROTO_TCP = 6;
+const i32 IPPROTO_UDP = 17;
+
+// TCP socket options
+const i32 SOL_SOCKET    = 1;
+const i32 SO_REUSEADDR  = 2;
+const i32 SO_REUSEPORT  = 15;
+const i32 SO_KEEPALIVE  = 9;
+const i32 SO_SNDBUF     = 7;
+const i32 SO_RCVBUF     = 8;
+
+const i32 IPPROTO_TCP_NODELAY = 1;
+
+// Shutdown modes
+const i32 SHUT_RD   = 0;
+const i32 SHUT_WR   = 1;
+const i32 SHUT_RDWR = 2;
+
+// Poll / epoll event flags
+const i32 POLLIN  = 1;
+const i32 POLLOUT = 4;
+const i32 POLLERR = 8;
+const i32 POLLHUP = 16;
+
+const i32 EPOLLIN  = 1;
+const i32 EPOLLOUT = 4;
+const i32 EPOLLERR = 8;
+const i32 EPOLLHUP = 16;
+const i32 EPOLLET  = -2147483648;  // edge-triggered flag
+
+const i32 EPOLL_CTL_ADD = 1;
+const i32 EPOLL_CTL_DEL = 2;
+const i32 EPOLL_CTL_MOD = 3;
+
+// HTONS constant helpers (network byte order for common ports)
+// Use std::net::htons() at runtime for dynamic ports.
+const i32 PORT_HTTP  = 80;
+const i32 PORT_HTTPS = 443;
+const i32 PORT_SSH   = 22;

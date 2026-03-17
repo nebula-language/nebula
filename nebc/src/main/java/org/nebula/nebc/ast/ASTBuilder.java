@@ -466,11 +466,18 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
 		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
+
+		TypeNode returnType = null;
+		if (ctx.return_type().type() != null)
+		{
+			returnType = (TypeNode) visit(ctx.return_type().type());
+		}
+
 		String operatorToken = ctx.overloadable_operator().getText();
 		List<Parameter> parameters = getParameters(ctx.parameters());
 		ASTNode body = getMethodBody(ctx.method_body());
 
-		return new OperatorDeclaration(span, operatorToken, parameters, body, attrs);
+		return new OperatorDeclaration(span, returnType, operatorToken, parameters, body, attrs);
 	}
 
 	@Override

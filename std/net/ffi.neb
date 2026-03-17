@@ -1,0 +1,52 @@
+namespace std::net;
+
+// =============================================================================
+// std::net::ffi — raw syscall bindings for networking
+// =============================================================================
+//
+// All functions declared here are thin shims over the Linux socket syscalls
+// implemented in std/runtime/core/net.c.  They expose the unchecked C ABI;
+// callers should use the higher-level wrappers in tcp.neb / udp.neb / polling.neb.
+
+private extern "C"
+{
+    // Socket creation / lifecycle
+    i64 neb_net_socket(i32 domain, i32 type, i32 protocol);
+    i32 neb_net_close(i64 fd);
+    i32 neb_net_shutdown(i64 fd, i32 how);
+
+    // Address manipulation
+    i32 neb_net_htons(i32 port);
+    u32 neb_net_inet_addr(keeps str ip);
+
+    // Server side
+    i32 neb_net_bind(i64 fd, i32 family, i32 port, u32 addr);
+    i32 neb_net_listen(i64 fd, i32 backlog);
+    i64 neb_net_accept(i64 fd);
+    i64 neb_net_accept4(i64 fd, i32 flags);
+
+    // Client side
+    i32 neb_net_connect(i64 fd, i32 family, i32 port, u32 addr);
+
+    // I/O
+    i64 neb_net_send(i64 fd, keeps Ref buf, i64 len, i32 flags);
+    i64 neb_net_recv(i64 fd, Ref buf, i64 len, i32 flags);
+    i64 neb_net_send_str(i64 fd, keeps str s);
+    str neb_net_recv_str(i64 fd, i64 maxLen);
+
+    // Socket options
+    i32 neb_net_setsockopt_i32(i64 fd, i32 level, i32 optname, i32 value);
+
+    // Non-blocking mode
+    i32 neb_net_set_nonblocking(i64 fd);
+
+    // Poll
+    i32 neb_net_poll(Ref fds, i32 nfds, i32 timeout);
+
+    // Epoll
+    i64 neb_net_epoll_create();
+    i32 neb_net_epoll_add(i64 epfd, i64 fd, u32 events, u64 data);
+    i32 neb_net_epoll_mod(i64 epfd, i64 fd, u32 events, u64 data);
+    i32 neb_net_epoll_del(i64 epfd, i64 fd);
+    i32 neb_net_epoll_wait(i64 epfd, Ref events, i32 maxEvents, i32 timeout);
+}

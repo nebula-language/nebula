@@ -1,0 +1,98 @@
+namespace std::net;
+
+use std::net::constants;
+use std::net::ffi;
+
+// =============================================================================
+// std::net::polling — epoll-based I/O event polling
+// =============================================================================
+//
+// Provides a thin wrapper over Linux's epoll interface for efficiently waiting
+// on many file descriptors.
+
+// =============================================================================
+// EpollEvent — mirrors the runtime's NebulaEpollEvent struct
+// =============================================================================
+
+struct EpollEvent
+{
+    u32 events;    // event bitmask (EPOLLIN, EPOLLOUT, …)
+    u32 _pad;      // alignment padding
+    u64 data;      // user data (typically file descriptor)
+
+    EpollEvent(u32 events, u64 data)
+    {
+        this.events = events;
+        this._pad   = 0;
+        this.data   = data;
+    }
+}
+
+// =============================================================================
+// PollFd — used with the simpler poll() interface
+// =============================================================================
+
+struct PollFd
+{
+    i32 fd;
+    i32 events;
+    i32 revents;
+
+    PollFd(i32 fd, i32 events)
+    {
+        this.fd      = fd;
+        this.events  = events;
+        this.revents = 0;
+    }
+}
+
+// =============================================================================
+// Epoll — epoll instance handle
+// =============================================================================
+
+struct Epoll
+{
+    i64 fd; // epoll file descriptor
+
+    Epoll(i64 fd)
+    {
+        this.fd = fd;
+    }
+
+    // -- Registration ---------------------------------------------------------
+
+    i32 add(i64 sockFd, u32 events, u64 data)
+        => neb_net_epoll_add(this.fd, sockFd, events, data)
+
+    i32 modify(i64 sockFd, u32 events, u64 data)
+        => neb_net_epoll_mod(this.fd, sockFd, events, data)
+
+    i32 remove(i64 sockFd)
+        => neb_net_epoll_del(this.fd, sockFd)
+
+    // -- Waiting --------------------------------------------------------------
+
+    // Wait for events.  `events` must be a pre-allocated EpollEvent array.
+    // Returns the number of ready file descriptors, or < 0 on error.
+    i32 wait(Ref events, i32 maxEvents, i32 timeoutMs)
+        => neb_net_epoll_wait(this.fd, events, maxEvents, timeoutMs)
+
+    // -- Lifecycle ------------------------------------------------------------
+
+    void close()
+    {
+        neb_net_close(this.fd);
+    }
+}
+
+// =============================================================================
+// Free-standing constructors
+// =============================================================================
+
+// Create a new epoll instance.  Returns Ok(Epoll) / Err(NetError.SocketError).
+SocketResult createEpoll()
+{
+    i64 fd = neb_net_epoll_create();
+    if (fd < 0) return SocketResult.Err(NetError.SocketError);
+    return SocketResult.Ok(fd);
+}

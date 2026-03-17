@@ -82,7 +82,12 @@ i32 rmAll(keeps str path) => __nebula_rt_system_rm_all(path)
 // getCwd — return the current working directory
 // =============================================================================
 //
-// Returns the absolute path of the current working directory as a str.
-// Returns an empty str on failure.
+// Returns the absolute path of the current working directory as a str,
+// or null on failure.
 
-str getCwd() => __nebula_rt_system_getcwd()
+str? getCwd()
+{
+    str result = __nebula_rt_system_getcwd();
+    if (result.length() == 0) return none;
+    return result;
+}

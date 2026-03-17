@@ -3536,6 +3536,18 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			return arr.baseType;
 		}
 
+		// Delegate to operator[] overload on composite types
+		if (targetType instanceof CompositeType ct)
+		{
+			Symbol opSym = ct.getMemberScope().resolve("operator[]");
+			if (opSym instanceof MethodSymbol ms)
+			{
+				Type result = ms.getType().getReturnType();
+				recordType(node, result);
+				return result;
+			}
+		}
+
 		if (targetType != Type.ERROR)
 		{
 			error(DiagnosticCode.TYPE_NOT_INDEXABLE, node.target, targetType.name());
@@ -4032,7 +4044,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	/**
 	 * Registers an operator declaration as a {@link MethodSymbol} in the current (member) scope.
 	 * The symbol name is {@code "operator" + token} (e.g. {@code "operator+"}).
-	 * Return type is inferred: {@code bool} for comparison operators, receiver type otherwise.
+	 * If a return type is declared on the node it is used directly; otherwise the return type
+	 * is inferred: {@code bool} for comparison operators, receiver type for all others.
 	 */
 	private void defineOperatorSignature(OperatorDeclaration od)
 	{
@@ -4046,12 +4059,20 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			paramTypes.add(pType != null ? pType : Type.ERROR);
 		}
 
-		// Infer return type: bool for equality/relational, receiver type for arithmetic/bitwise
-		Type returnType = switch (od.operatorToken)
+		// Use explicitly declared return type when present; fall back to inference.
+		Type returnType;
+		if (od.returnType != null)
 		{
-			case "==", "!=", "<", ">", "<=", ">=" -> PrimitiveType.BOOL;
-			default                               -> receiverType;
-		};
+			returnType = resolveType(od.returnType);
+		}
+		else
+		{
+			returnType = switch (od.operatorToken)
+			{
+				case "==", "!=", "<", ">", "<=", ">=" -> PrimitiveType.BOOL;
+				default                               -> receiverType;
+			};
+		}
 
 		FunctionType fnType = new FunctionType(returnType, paramTypes);
 		String symbolName = "operator" + od.operatorToken;

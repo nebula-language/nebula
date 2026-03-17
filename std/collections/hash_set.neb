@@ -1,0 +1,92 @@
+namespace std::collections;
+
+use std::collections::traits;
+use std::collections::hash_map;
+
+// =============================================================================
+// std::collections::HashSet<T: Hashable> — unordered set
+// =============================================================================
+//
+// A set backed by a HashMap<T, bool>.  Membership tests, additions, and
+// removals are all O(1) average.
+
+class HashSet<T: Hashable>
+{
+    private HashMap<T, bool> map;
+
+    HashSet()
+    {
+        this.map = new HashMap<T, bool>();
+    }
+
+    // -------------------------------------------------------------------------
+    // Mutation
+    // -------------------------------------------------------------------------
+
+    // Add `value` to the set.  Returns true when it was newly inserted,
+    // false when it was already present.
+    bool add(T value)
+    {
+        var result = this.map.put(value, true);
+        return match (result)
+        {
+            Inserted    => true,
+            Updated(_)  => false
+        };
+    }
+
+    // Remove `value` from the set.  Returns true when found and removed.
+    bool remove(keeps T value)
+    {
+        var result = this.map.remove(value);
+        return match (result)
+        {
+            Removed(_) => true,
+            Missing    => false
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // Query
+    // -------------------------------------------------------------------------
+
+    bool contains(keeps T value) => this.map.containsKey(value)
+
+    // -------------------------------------------------------------------------
+    // Bulk operations
+    // -------------------------------------------------------------------------
+
+    // Return a new set that is the union of this and other.
+    HashSet<T> union(keeps HashSet<T> other)
+    {
+        var out    = new HashSet<T>();
+        out.map    = this.map + other.map;
+        return out;
+    }
+
+    // -------------------------------------------------------------------------
+    // Operators
+    // -------------------------------------------------------------------------
+
+    HashSet<T> operator +(HashSet<T> other) => this.union(other)
+
+    bool operator ==(HashSet<T> other) => this.map == other.map
+
+    bool operator !=(HashSet<T> other) => !(this == other)
+}
+
+// =============================================================================
+// Trait implementations
+// =============================================================================
+
+impl Collection for HashSet<T: Hashable>
+{
+    i64  size()    => this.map.size()
+    bool isEmpty() => this.map.isEmpty()
+
+    void clear()
+    {
+        this.map.clear();
+    }
+}
+

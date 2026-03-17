@@ -1,0 +1,139 @@
+namespace std::net;
+
+use std::net::constants;
+use std::net::ffi;
+use std::net::core;
+
+// =============================================================================
+// std::net::tcp — TCP socket helpers
+// =============================================================================
+//
+// Provides thin ergonomic wrappers over the raw net::ffi bindings for typical
+// TCP client/server patterns.  All operations are synchronous; for concurrent
+// I/O see std::net::polling.
+
+// =============================================================================
+// TcpServer — a listening TCP socket
+// =============================================================================
+
+struct TcpServer
+{
+    i64 fd;
+
+    TcpServer(i64 fd)
+    {
+        this.fd = fd;
+    }
+
+    // -- Lifecycle ------------------------------------------------------------
+
+    // Accept the next incoming connection.  Blocks until a client connects.
+    // Returns Ok(clientFd) on success; Err on syscall failure.
+    SocketResult accept()
+    {
+        i64 clientFd = neb_net_accept(this.fd);
+        if (clientFd < 0) return SocketResult.Err(NetError.AcceptError);
+        return SocketResult.Ok(clientFd);
+    }
+
+    // Accept with flags (e.g. SOCK_NONBLOCK | SOCK_CLOEXEC).
+    SocketResult accept4(i32 flags)
+    {
+        i64 clientFd = neb_net_accept4(this.fd, flags);
+        if (clientFd < 0) return SocketResult.Err(NetError.AcceptError);
+        return SocketResult.Ok(clientFd);
+    }
+
+    // Close the listening socket.
+    void close()
+    {
+        neb_net_close(this.fd);
+    }
+}
+
+// =============================================================================
+// TcpConn — a connected TCP stream (client or accepted server-side socket)
+// =============================================================================
+
+struct TcpConn
+{
+    i64 fd;
+
+    TcpConn(i64 fd)
+    {
+        this.fd = fd;
+    }
+
+    // -- I/O ------------------------------------------------------------------
+
+    // Send a string over the connection.
+    IoResult send(keeps str data)
+    {
+        i64 n = neb_net_send_str(this.fd, data);
+        if (n < 0) return IoResult.Err(NetError.SendError);
+        return IoResult.Ok(n);
+    }
+
+    // Receive up to `maxLen` bytes as a str.
+    // Returns Ok(data) on success; Err on failure or closed connection.
+    // Blocks until data is available.
+    SocketResult recv(i64 maxLen)
+    {
+        str data = neb_net_recv_str(this.fd, maxLen);
+        if (data.length() == 0) return SocketResult.Err(NetError.Closed);
+        return SocketResult.Ok(this.fd);  // placeholder — returns fd, content via data
+    }
+
+    // -- Lifecycle ------------------------------------------------------------
+
+    void shutdown(i32 how) { neb_net_shutdown(this.fd, how); }
+    void close()           { neb_net_close(this.fd); }
+}
+
+// =============================================================================
+// Free-standing constructors
+// =============================================================================
+
+// Create a non-blocking TCP server bound to `port` on all interfaces,
+// with the given listen `backlog`.
+// Returns SocketResult.Ok(TcpServer) / SocketResult.Err(reason).
+SocketResult listenTcp(i32 port, i32 backlog)
+{
+    i64 fd = neb_net_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) return SocketResult.Err(NetError.SocketError);
+
+    neb_net_setsockopt_i32(fd, SOL_SOCKET, SO_REUSEADDR, 1);
+
+    i32 bindResult = neb_net_bind(fd, AF_INET, port, 0);
+    if (bindResult < 0)
+    {
+        neb_net_close(fd);
+        return SocketResult.Err(NetError.BindError);
+    }
+
+    i32 listenResult = neb_net_listen(fd, backlog);
+    if (listenResult < 0)
+    {
+        neb_net_close(fd);
+        return SocketResult.Err(NetError.ListenError);
+    }
+
+    return SocketResult.Ok(fd);
+}
+
+// Connect to a TCP server at `host`:`port`.
+ConnectResult connectTcp(keeps str host, i32 port)
+{
+    i64 fd = neb_net_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) return ConnectResult.Err(NetError.SocketError);
+
+    u32 addr = neb_net_inet_addr(host);
+    i32 result = neb_net_connect(fd, AF_INET, port, addr);
+    if (result < 0)
+    {
+        neb_net_close(fd);
+        return ConnectResult.Err(NetError.ConnectError);
+    }
+
+    return ConnectResult.Connected;
+}

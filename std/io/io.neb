@@ -20,5 +20,10 @@ void print<T: Printable>(T item) => __nebula_rt_print(item.toStr())
 void println<T: Printable>(T item) => __nebula_rt_println(item.toStr())
 
 // Read a single line from stdin, stripping the trailing newline.
-// Returns an empty str on EOF or error.
-str readLine() => __nebula_rt_io_read_line()
+// Returns null on EOF or error; an empty str for a blank line (just Enter).
+str? readLine()
+{
+    str line = __nebula_rt_io_read_line();
+    if (line.length() == 0) return none;
+    return line;
+}

@@ -4029,7 +4029,55 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			}
 		}
 
+		// Delegate to operator[] overload on composite types
+		if (baseType instanceof CompositeType ct)
+		{
+			Symbol opSym = ct.getMemberScope().resolve("operator[]");
+			if (opSym instanceof MethodSymbol ms)
+			{
+				return emitIndexOperatorCall(node, ms, ct);
+			}
+		}
+
 		throw new CodegenException("Indexing only supported on Ref/string/array types for now.");
+	}
+
+	/**
+	 * Emits a call to a user-defined {@code operator[]} method.
+	 * Convention: {@code (ptr this, indexArg) -> returnValue}.
+	 */
+	private LLVMValueRef emitIndexOperatorCall(IndexExpression node, MethodSymbol ms, CompositeType targetType)
+	{
+		LLVMValueRef targetVal = node.target.accept(this);
+		if (targetVal == null)
+			return null;
+
+		LLVMValueRef selfPtr;
+		if (LLVMGetTypeKind(LLVMTypeOf(targetVal)) == LLVMPointerTypeKind)
+		{
+			selfPtr = targetVal;
+		}
+		else
+		{
+			LLVMTypeRef structTy = LLVMTypeMapper.getOrCreateStructType(context, targetType);
+			selfPtr = emitEntryAlloca(structTy, "idx_op_tmp");
+			LLVMBuildStore(builder, targetVal, selfPtr);
+		}
+
+		LLVMValueRef indexVal = node.indices.get(0).accept(this);
+		if (indexVal == null)
+			return null;
+
+		String mangledName = ms.getMangledName();
+		LLVMValueRef func = LLVMGetNamedFunction(module, mangledName);
+		if (func == null || func.isNull())
+		{
+			func = LLVMAddFunction(module, mangledName, toLLVMType(ms.getType()));
+		}
+
+		LLVMValueRef[] args = {selfPtr, indexVal};
+		return LLVMBuildCall2(builder, toLLVMType(ms.getType()), func,
+				new PointerPointer<>(args), 2, "idx_result");
 	}
 
 	@Override

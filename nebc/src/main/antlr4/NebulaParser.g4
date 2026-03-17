@@ -343,7 +343,7 @@ method_body
     ;
 
 operator_declaration
-    : attribute* OPERATOR overloadable_operator parameters method_body
+    : attribute* return_type OPERATOR overloadable_operator parameters method_body
     ;
 
 overloadable_operator
@@ -359,6 +359,7 @@ overloadable_operator
     | GT GT
     | OP_EQ
     | OP_NE
+    | OPEN_BRACKET CLOSE_BRACKET
     ;
 
 //=============================================================================

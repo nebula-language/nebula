@@ -29,14 +29,22 @@ private extern "C"
 // Free-standing wrappers  (backward compat + std::strings::indexOf(...) access)
 // =============================================================================
 
-i64 indexOf(keeps str haystack, keeps str needle, i64 start)
+// Returns the index of `needle` in `haystack` starting from `start`,
+// or null if not found.
+i64? indexOf(keeps str haystack, keeps str needle, i64 start)
 {
-    return neb_str_index_of(haystack, needle, start);
+    i64 result = neb_str_index_of(haystack, needle, start);
+    if (result < 0) return none;
+    return result;
 }
 
-i64 indexOfChar(keeps str haystack, i32 ch, i64 start)
+// Returns the index of `ch` in `haystack` starting from `start`,
+// or null if not found.
+i64? indexOfChar(keeps str haystack, i32 ch, i64 start)
 {
-    return neb_str_index_of_char(haystack, ch, start);
+    i64 result = neb_str_index_of_char(haystack, ch, start);
+    if (result < 0) return none;
+    return result;
 }
 
 // =============================================================================
@@ -50,9 +58,9 @@ trait StringUtils
     i32 charAt(i64 index);
 
     // -- Searching ------------------------------------------------------------
-    i64 indexOf(str needle, i64 start);
-    i64 indexOfChar(i32 ch, i64 start);
-    i64 lastIndexOfChar(i32 ch);
+    i64? indexOf(str needle, i64 start);
+    i64? indexOfChar(i32 ch, i64 start);
+    i64? lastIndexOfChar(i32 ch);
 
     // -- Extraction -----------------------------------------------------------
     str substring(i64 start, i64 length);
@@ -70,7 +78,7 @@ trait StringUtils
     str trim();
 
     // -- Parsing --------------------------------------------------------------
-    i64 parseI64();
+    i64? parseI64();
 
     // -- Building -------------------------------------------------------------
     str concat(str other);
@@ -88,9 +96,24 @@ impl StringUtils for str
     i32 charAt(i64 index) => neb_str_char_at(this, index)
 
     // -- Searching ------------------------------------------------------------
-    i64 indexOf(str needle, i64 start) => neb_str_index_of(this, needle, start)
-    i64 indexOfChar(i32 ch, i64 start) => neb_str_index_of_char(this, ch, start)
-    i64 lastIndexOfChar(i32 ch) => neb_str_last_index_of_char(this, ch)
+    i64? indexOf(str needle, i64 start)
+    {
+        i64 result = neb_str_index_of(this, needle, start);
+        if (result < 0) return none;
+        return result;
+    }
+    i64? indexOfChar(i32 ch, i64 start)
+    {
+        i64 result = neb_str_index_of_char(this, ch, start);
+        if (result < 0) return none;
+        return result;
+    }
+    i64? lastIndexOfChar(i32 ch)
+    {
+        i64 result = neb_str_last_index_of_char(this, ch);
+        if (result < 0) return none;
+        return result;
+    }
 
     // -- Extraction -----------------------------------------------------------
     str substring(i64 start, i64 length) => neb_str_substring(this, start, length)
@@ -108,7 +131,14 @@ impl StringUtils for str
     str trim() => neb_str_trim(this)
 
     // -- Parsing --------------------------------------------------------------
-    i64 parseI64() => neb_str_parse_i64(this)
+    i64? parseI64()
+    {
+        // neb_str_parse_i64 returns 0 on invalid input — propagate as null
+        // so callers are forced to handle the invalid-parse case.
+        i64 result = neb_str_parse_i64(this);
+        if (result == 0 && !this.equals("0")) return none;
+        return result;
+    }
 
     // -- Building -------------------------------------------------------------
     str concat(str other) => neb_str_concat2(this, other)

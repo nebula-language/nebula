@@ -1,0 +1,91 @@
+namespace std::net;
+
+use std::net::constants;
+use std::net::ffi;
+
+// =============================================================================
+// std::net::core — shared socket address types and result unions
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// SockAddrIn — IPv4 socket address (mirrors Linux sockaddr_in)
+// -----------------------------------------------------------------------------
+
+struct SockAddrIn
+{
+    i32 family;   // AF_INET
+    i32 port;     // network byte order
+    u32 addr;     // IPv4 address in network byte order; 0 = INADDR_ANY
+
+    SockAddrIn(i32 port, u32 addr)
+    {
+        this.family = AF_INET;
+        this.port   = neb_net_htons(port);
+        this.addr   = addr;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// NetError — classification of network-level failures
+// -----------------------------------------------------------------------------
+
+enum NetError
+{
+    SocketError,
+    BindError,
+    ListenError,
+    ConnectError,
+    AcceptError,
+    SendError,
+    RecvError,
+    OptionError,
+    Timeout,
+    Closed
+}
+
+// -----------------------------------------------------------------------------
+// Common result unions
+// -----------------------------------------------------------------------------
+
+// Outcome of opening a socket or accepting a connection.
+union SocketResult
+{
+    Ok(i64 fd),
+    Err(NetError reason)
+}
+
+// Outcome of a send/recv call: bytes transferred or an error.
+union IoResult
+{
+    Ok(i64 bytes),
+    Err(NetError reason)
+}
+
+// Outcome of a connect/bind call.
+union ConnectResult
+{
+    Connected,
+    Err(NetError reason)
+}
+
+// =============================================================================
+// Free-standing helpers
+// =============================================================================
+
+// Convert a host-byte-order port to network byte order.
+i32 htons(i32 port) => neb_net_htons(port)
+
+// Parse a dotted-decimal IPv4 string into a network-order u32.
+// Returns 0 (INADDR_ANY) on parse failure.
+u32 inetAddr(keeps str ip) => neb_net_inet_addr(ip)
+
+// Set a socket option (integer value).
+// Returns 0 on success, < 0 on error.
+i32 setOption(i64 fd, i32 level, i32 optname, i32 value)
+    => neb_net_setsockopt_i32(fd, level, optname, value)
+
+// Set socket to non-blocking mode.  Returns 0 on success.
+i32 setNonBlocking(i64 fd) => neb_net_set_nonblocking(fd)
+
+// Close a socket file descriptor.
+i32 close(i64 fd) => neb_net_close(fd)

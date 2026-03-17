@@ -170,7 +170,7 @@ public class Desugarer implements ASTVisitor<ASTNode>
 	public ASTNode visitOperatorDeclaration(OperatorDeclaration node)
 	{
 		ASTNode body = node.body != null ? node.body.accept(this) : null;
-		return new OperatorDeclaration(node.getSpan(), node.operatorToken, node.parameters, body, node.attributes);
+		return new OperatorDeclaration(node.getSpan(), node.returnType, node.operatorToken, node.parameters, body, node.attributes);
 	}
 
 	@Override

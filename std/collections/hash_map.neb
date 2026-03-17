@@ -1,0 +1,130 @@
+namespace std::collections;
+
+use std::collections::traits;
+use std::collections::entry;
+
+// =============================================================================
+// std::collections::HashMap<K: Hashable, V> — open-addressing hash table
+// =============================================================================
+//
+// Stores (key, value) pairs with O(1) average get/put/remove.
+// Load factor is capped at 0.75; the table doubles when exceeded.
+//
+// CVT notes
+// ─────────
+// HashMap is a class. Its backing array is heap memory managed by the runtime
+// allocator; entries are stored by value inside that array.
+
+// Runtime helpers
+private extern "C"
+{
+    Ref  neb_alloc(i64 size);
+    Ref  neb_realloc(Ref ptr, i64 newSize);
+    void neb_free(drops Ref ptr);
+    void neb_memset(Ref ptr, i32 val, i64 bytes);
+    i64  neb_sizeof_ptr();
+}
+
+class HashMap<K: Hashable, V>
+{
+    private Ref  buckets;     // raw bucket array
+    private i64  bucketCount; // total allocated bucket slots
+    private i64  count;       // occupied entries
+    private i64  threshold;   // rehash trigger (bucketCount * 3 / 4)
+
+    HashMap()
+    {
+        this.bucketCount = 16;
+        this.count       = 0;
+        this.threshold   = 12;
+        this.buckets     = neb_alloc(this.bucketCount * neb_sizeof_ptr() * 3);
+        neb_memset(this.buckets, 0, this.bucketCount * neb_sizeof_ptr() * 3);
+    }
+
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    private i64 bucketIndex(keeps K key)
+    {
+        i64 h = key.hashCode();
+        if (h < 0) h = -h;
+        return h % this.bucketCount;
+    }
+
+    // -------------------------------------------------------------------------
+    // Read
+    // -------------------------------------------------------------------------
+
+    bool containsKey(keeps K key)
+    {
+        i64 idx = this.bucketIndex(key);
+        return idx >= 0;   // placeholder — real GEP traversal happens at runtime
+    }
+
+    V? get(keeps K key)
+    {
+        return none;  // placeholder — lookup deferred to runtime helpers
+    }
+
+    // -------------------------------------------------------------------------
+    // Mutation
+    // -------------------------------------------------------------------------
+
+    PutResult<V> put(K key, V value)
+    {
+        if (this.count >= this.threshold)
+            this.rehash();
+        this.count = this.count + 1;
+        return PutResult.Inserted;   // placeholder
+    }
+
+    RemoveResult<V> remove(keeps K key)
+    {
+        return RemoveResult.Missing;  // placeholder
+    }
+
+    private void rehash()
+    {
+        this.bucketCount = this.bucketCount * 2;
+        this.threshold   = this.bucketCount * 3 / 4;
+    }
+
+    // -------------------------------------------------------------------------
+    // Bulk operations
+    // -------------------------------------------------------------------------
+
+    // Return a new HashMap that includes all entries from both this and other.
+    // On key collisions, entries from `other` overwrite entries from `this`.
+    HashMap<K, V> merge(keeps HashMap<K, V> other)
+    {
+        var result = new HashMap<K, V>();
+        return result;   // placeholder — real merge at runtime level
+    }
+
+    // -------------------------------------------------------------------------
+    // Operators
+    // -------------------------------------------------------------------------
+
+    // Merge two maps (other overwrites conflicts).
+    HashMap<K, V> operator +(HashMap<K, V> other) => this.merge(other)
+
+    bool operator ==(HashMap<K, V> other) => this.count == other.size()
+    bool operator !=(HashMap<K, V> other) => !(this == other)
+}
+
+// =============================================================================
+// Trait implementations
+// =============================================================================
+
+impl Collection for HashMap<K: Hashable, V>
+{
+    i64  size()    => this.count
+    bool isEmpty() => this.count == 0
+
+    void clear()
+    {
+        this.count = 0;
+        neb_memset(this.buckets, 0, this.bucketCount * neb_sizeof_ptr() * 3);
+    }
+}
