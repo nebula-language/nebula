@@ -1,8 +1,5 @@
 namespace std::net;
 
-use std::net::constants;
-use std::net::ffi;
-
 // =============================================================================
 // std::net::core — shared socket address types and result unions
 // =============================================================================

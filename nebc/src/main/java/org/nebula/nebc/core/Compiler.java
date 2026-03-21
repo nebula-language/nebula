@@ -36,6 +36,18 @@ public class Compiler
 	/** Library names (e.g. "neb") auto-detected alongside loaded .nebsym files. */
 	private final List<SourceFile> autoLibNames = new ArrayList<>();
 
+	/**
+	 * The resolved {@code $NEBULA_HOME/lib/std-<version>} directory, populated by
+	 * resolveStdPaths() before compilation begins. Null if --nostdlib was passed.
+	 */
+	private Path resolvedStdDir = null;
+
+	/** Resolved path to neb.nebsym inside resolvedStdDir. */
+	private Path resolvedStdSym = null;
+
+	/** Resolved path to libneb.so (preferred) or libneb.a inside resolvedStdDir. */
+	private Path resolvedStdLib = null;
+
 	public Compiler(CompilerConfig config)
 	{
 		this.config = config;
@@ -43,6 +55,15 @@ public class Compiler
 
 	public ExitCode run()
 	{
+		// 0. Resolve standard library paths eagerly, before any compilation work.
+		//    This lets us fail fast with a clear message if the installation is
+		//    incomplete, rather than discovering missing files mid-compilation.
+		if (config.useStdLib())
+		{
+			if (!resolveStdPaths())
+				return ExitCode.IO_ERROR;
+		}
+
 		// 1. Frontend: Lexing & Parsing
 		// We start by parsing user sources. Std lib will be loaded on demand.
 		Parser parser = new Parser(config, new ArrayList<>());
@@ -273,43 +294,56 @@ public class Compiler
 		List<Path> objects = new ArrayList<>();
 		List<org.nebula.nebc.io.SourceFile> nativeSources = new ArrayList<>(config.nativeSources());
 
-		// 1. Automatically include standard library runtime if enabled.
-		// When building a library (--library flag), always include std/runtime/*.c even
-		// if --nostdlib was passed. --nostdlib only prevents loading neb.nebsym and
-		// auto-linking libneb.so — the C runtime must still be compiled into the library itself.
-		if (config.useStdLib() || config.compileAsLibrary())
+		// 1. Automatically include runtime C sources for library builds.
+		//    For regular executable builds, pre-compiled shared/static libs are linked
+		//    instead. Library builds must embed runtime symbols so produced .so files
+		//    are self-contained (especially when building std itself with --nostdlib).
+		if (config.compileAsLibrary())
 		{
-			Path stdRuntimeDir = Path.of("std", "runtime");
-			if (!Files.exists(stdRuntimeDir))
-			{
-				stdRuntimeDir = Path.of("..", "std", "runtime"); // Try parent for dev environment
-			}
+			java.util.Set<Path> runtimeDirs = discoverRuntimeDirs();
+			java.util.Set<Path> runtimeSources = new java.util.LinkedHashSet<>();
 
-			if (Files.exists(stdRuntimeDir))
+			for (Path runtimeDir : runtimeDirs)
 			{
-				try (java.util.stream.Stream<Path> stream = Files.walk(stdRuntimeDir))
+				if (!Files.exists(runtimeDir))
 				{
-					List<Path> stdCFiles = stream.filter(p -> p.toString().endsWith(".c") || p.toString().endsWith(".cpp")).toList();
+					continue;
+				}
+
+				try (java.util.stream.Stream<Path> stream = Files.walk(runtimeDir))
+				{
+					List<Path> stdCFiles = stream
+							.filter(p -> p.toString().endsWith(".c") || p.toString().endsWith(".cpp"))
+							.toList();
 					for (Path cFile : stdCFiles)
 					{
 						String fileName = cFile.getFileName().toString();
-						// Skip start.c if compiling as a library, it's the entry point wrapper
-						if (config.compileAsLibrary() && fileName.equals("start.c"))
+						// start.c is the binary entry-point wrapper — skip for libraries.
+						if (fileName.equals("start.c"))
 							continue;
-						// Skip deprecated wrapper file - syscalls.c is superseded by runtime.c and linux_syscalls.c
+						// syscalls.c is superseded by runtime.c and linux_syscalls.c.
 						if (fileName.equals("syscalls.c"))
 							continue;
-						nativeSources.add(new org.nebula.nebc.io.SourceFile(cFile.toAbsolutePath().toString()));
+						runtimeSources.add(cFile.toAbsolutePath());
 					}
 				}
 				catch (IOException e)
 				{
-					Log.warn("Failed to scan standard library runtime: " + e.getMessage());
+					Log.warn("Failed to scan runtime sources at " + runtimeDir + ": " + e.getMessage());
 				}
+			}
+
+			if (runtimeSources.isEmpty())
+			{
+				Log.warn("Runtime sources were not found for this library build.");
+				Log.warn("The compiled library may be missing runtime functions (e.g. neb_* and __nebula_rt_*).");
 			}
 			else
 			{
-				Log.warn("Standard library runtime directory (std/runtime) not found.");
+				for (Path cFile : runtimeSources)
+				{
+					nativeSources.add(new org.nebula.nebc.io.SourceFile(cFile.toString()));
+				}
 			}
 		}
 
@@ -357,8 +391,140 @@ public class Compiler
 		return objects;
 	}
 
+	/**
+	 * Discovers candidate runtime directories for library builds.
+	 *
+	 * <p>Order of preference:</p>
+	 * <ol>
+	 *   <li>{@code $NEBULA_HOME/lib/std-<version>/runtime} when std is resolved.</li>
+	 *   <li>Any {@code runtime/} directory found by walking up from Nebula source
+	 *       files (supports building std with {@code --nostdlib}).</li>
+	 * </ol>
+	 */
+	private java.util.Set<Path> discoverRuntimeDirs()
+	{
+		java.util.Set<Path> dirs = new java.util.LinkedHashSet<>();
+
+		if (resolvedStdDir != null)
+		{
+			dirs.add(resolvedStdDir.resolve("runtime").toAbsolutePath().normalize());
+		}
+
+		for (SourceFile sf : config.nebSources())
+		{
+			Path sourcePath = Path.of(sf.path()).toAbsolutePath().normalize();
+			Path dir = Files.isDirectory(sourcePath) ? sourcePath : sourcePath.getParent();
+
+			while (dir != null)
+			{
+				Path candidate = dir.resolve("runtime");
+				if (Files.isDirectory(candidate))
+				{
+					dirs.add(candidate.toAbsolutePath().normalize());
+				}
+				dir = dir.getParent();
+			}
+		}
+
+		return dirs;
+	}
+
+	// ==========================================================================
+	// $NEBULA_HOME resolution helpers
+	// ==========================================================================
+
+	/**
+	 * Returns the Nebula home directory.
+	 * <ul>
+	 *   <li>Uses {@code $NEBULA_HOME} if the environment variable is set and non-blank.</li>
+	 *   <li>Falls back to {@code $HOME/.nebula} otherwise.</li>
+	 * </ul>
+	 */
+	private static Path resolveNebulaHome()
+	{
+		String envHome = System.getenv("NEBULA_HOME");
+		if (envHome != null && !envHome.isBlank())
+			return Path.of(envHome);
+
+		return Path.of(System.getProperty("user.home"), ".nebula");
+	}
+
+	/**
+	 * Searches {@code $NEBULA_HOME/lib/} for a directory whose name starts with
+	 * {@code "std-"} and returns the first match, or empty if not found.
+	 */
+	private static java.util.Optional<Path> findStdLibDir(Path nebulaHome)
+	{
+		Path libDir = nebulaHome.resolve("lib");
+		if (!Files.exists(libDir))
+			return java.util.Optional.empty();
+
+		try (java.util.stream.Stream<Path> stream = Files.list(libDir))
+		{
+			return stream
+					.filter(Files::isDirectory)
+					.filter(p -> p.getFileName().toString().startsWith("std-"))
+					.findFirst();
+		}
+		catch (IOException e)
+		{
+			return java.util.Optional.empty();
+		}
+	}
+
+	/**
+	 * Resolves and validates the standard library paths from {@code $NEBULA_HOME}.
+	 * Populates {@link #resolvedStdDir}, {@link #resolvedStdSym}, and
+	 * {@link #resolvedStdLib}.
+	 *
+	 * <p>Returns {@code true} on success. On failure it prints a clear error message
+	 * and returns {@code false} so the caller can abort immediately.</p>
+	 */
+	private boolean resolveStdPaths()
+	{
+		Path nebulaHome = resolveNebulaHome();
+		java.util.Optional<Path> stdDirOpt = findStdLibDir(nebulaHome);
+
+		if (stdDirOpt.isEmpty())
+		{
+			Log.err("Standard library not found.");
+			Log.err("Expected a 'std-*' directory under: " + nebulaHome.resolve("lib"));
+			Log.err("Install Nebula or set the NEBULA_HOME environment variable.");
+			return false;
+		}
+
+		Path stdDir = stdDirOpt.get();
+
+		// Validate symbols file
+		Path stdSym = stdDir.resolve("neb.nebsym");
+		if (!Files.exists(stdSym))
+		{
+			Log.err("Standard library symbols not found: " + stdSym);
+			Log.err("The Nebula installation may be incomplete.");
+			return false;
+		}
+
+		// Validate compiled library (prefer .so, fall back to .a)
+		Path sharedLib = stdDir.resolve("libneb.so");
+		Path staticLib = stdDir.resolve("libneb.a");
+		if (!Files.exists(sharedLib) && !Files.exists(staticLib))
+		{
+			Log.err("Standard library binary not found in: " + stdDir);
+			Log.err("Expected libneb.so or libneb.a — the Nebula installation may be incomplete.");
+			return false;
+		}
+
+		this.resolvedStdDir = stdDir;
+		this.resolvedStdSym = stdSym;
+		this.resolvedStdLib = Files.exists(sharedLib) ? sharedLib : staticLib;
+
+		Log.info("Using standard library: " + stdDir);
+		return true;
+	}
+
 	private boolean loadExternalSymbols(SemanticAnalyzer analyzer)
 	{
+
 		SymbolImporter importer  = new SymbolImporter();
 		java.util.Map<Type, SymbolTable> primImpls = analyzer.getPrimitiveImplScopes();
 
@@ -372,49 +538,28 @@ public class Compiler
 		{
 			try
 			{
-				Path stdSyms = Path.of("neb.nebsym");
-				if (!Files.exists(stdSyms))
-				{
-					stdSyms = Path.of("..", "neb.nebsym");
-				}
+				// resolvedStdSym was validated in resolveStdPaths() — it is guaranteed to exist.
+				Log.info("Loading standard library symbols: " + resolvedStdSym);
+				importer.importSymbols(resolvedStdSym.toString(), analyzer.getGlobalScope(), primImpls);
+				loadedSymPaths.add(resolvedStdSym.toAbsolutePath().toString());
 
-				if (Files.exists(stdSyms))
+				// Link against the pre-compiled std binary (only needed for executable builds;
+				// library builds embed the runtime C sources directly via compileNativeSources).
+				if (!config.compileAsLibrary())
 				{
-					Log.info("Loading standard library symbols: " + stdSyms);
-					importer.importSymbols(stdSyms.toString(), analyzer.getGlobalScope(), primImpls);
-					loadedSymPaths.add(stdSyms.toAbsolutePath().toString());
-
-					// Auto-detect the compiled std library (.so or .a) next to the .nebsym
-					// file so consumers of erased bitcode can resolve concrete symbols like
-					// str__Stringable__toStr at link time without explicit -l flags.
-					if (!config.compileAsLibrary())
-					{
-						Path symDir = stdSyms.toAbsolutePath().getParent();
-						if (symDir == null)
-							symDir = Path.of("").toAbsolutePath();
-						for (String libName : List.of("libneb.so", "libneb.a"))
-						{
-							Path candidate = symDir.resolve(libName);
-							if (Files.exists(candidate))
-							{
-								// Strip "lib" prefix and ".so"/".a" suffix for -l flag
-								String baseName = libName.substring(3, libName.lastIndexOf('.'));
-								autoLibraryDirs.add(symDir.toFile());
-								autoLibNames.add(new SourceFile(baseName));
-								Log.info("Auto-linking std library: " + candidate);
-								break;
-							}
-						}
-					}
-				}
-				else
-				{
-					Log.warn("Standard library symbols (neb.nebsym) not found.");
+					String libFileName = resolvedStdLib.getFileName().toString();
+					String baseName    = libFileName
+							.replaceFirst("^lib", "")
+							.replaceFirst("\\.(so|a)$", "");
+					autoLibraryDirs.add(resolvedStdLib.getParent().toFile());
+					autoLibNames.add(new SourceFile(baseName));
+					Log.info("Auto-linking std library: " + resolvedStdLib);
 				}
 			}
 			catch (IOException e)
 			{
 				Log.err("Failed to load standard library symbols: " + e.getMessage());
+				return false;
 			}
 		}
 

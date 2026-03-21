@@ -1,8 +1,5 @@
 namespace std::collections;
 
-use std::collections::traits;
-use std::collections::entry;
-
 // =============================================================================
 // std::collections::HashMap<K: Hashable, V> — open-addressing hash table
 // =============================================================================
@@ -14,16 +11,6 @@ use std::collections::entry;
 // ─────────
 // HashMap is a class. Its backing array is heap memory managed by the runtime
 // allocator; entries are stored by value inside that array.
-
-// Runtime helpers
-private extern "C"
-{
-    Ref  neb_alloc(i64 size);
-    Ref  neb_realloc(Ref ptr, i64 newSize);
-    void neb_free(drops Ref ptr);
-    void neb_memset(Ref ptr, i32 val, i64 bytes);
-    i64  neb_sizeof_ptr();
-}
 
 class HashMap<K: Hashable, V>
 {

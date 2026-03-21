@@ -152,9 +152,14 @@ public final class NativeCompiler
 				}
 			}
 
-			// Always enforce freestanding environment
-			command.add("-nostdlib");
-			command.add("-nostartfiles");
+			// Freestanding mode is only required for static/nostdlib builds.
+			// For normal executables we must allow the host CRT/libc link so
+			// symbols like _start and environ resolve correctly.
+			if (isStatic)
+			{
+				command.add("-nostdlib");
+				command.add("-nostartfiles");
+			}
 
 			if (isLibrary)
 			{

@@ -100,12 +100,10 @@ public final class LLVMTypeMapper
 		}
 		if (type instanceof TypeParameterType tpt)
 		{
-			// Unsubstituted type parameter reached codegen — this indicates a generic
-			// struct/class or method was not properly skipped before monomorphization.
-			new RuntimeException("DEBUG: TypeParameterType '" + tpt.name() + "' reached LLVMTypeMapper").printStackTrace(System.err);
-			throw new CodegenException(
-				"Unsubstituted type parameter '" + tpt.name() + "' reached codegen. "
-				+ "Generic instantiation (monomorphization) is not yet supported.");
+			// Erased generic lowering: unresolved type parameters are represented as
+			// opaque pointers in LLVM IR. This allows template/library symbols to be
+			// emitted with a stable ptr-based ABI.
+			return LLVMPointerTypeInContext(ctx, 0);
 		}
 		throw new CodegenException("Unmappable type: " + type.name());
 	}
@@ -311,7 +309,15 @@ public final class LLVMTypeMapper
 
 	public static LLVMTypeRef getOrCreateUnionStructType(LLVMContextRef ctx, UnionType ut)
 	{
-		String key = "union." + ut.name();
+		// Normalize the key: strip type arguments (e.g. "PutResult<V>" → "PutResult")
+		// so that generic unions with unerased type params share the same LLVM struct
+		// as their base definition.  This prevents IR type-mismatch when the function
+		// return type is resolved as "union.PutResult<V>" but the return expression
+		// uses the base "union.PutResult" struct.
+		String baseName = ut.name();
+		int lt = baseName.indexOf('<');
+		if (lt >= 0) baseName = baseName.substring(0, lt);
+		String key = "union." + baseName;
 		if (structTypes.containsKey(key))
 			return structTypes.get(key);
 
@@ -321,7 +327,7 @@ public final class LLVMTypeMapper
 		// Compute the maximum payload size from the variant constructors.
 		int maxPayload = UNION_MIN_PAYLOAD_BYTES;
 		java.util.Set<String> visited = new java.util.HashSet<>();
-		visited.add(ut.name()); // guard against self-referential unions
+		visited.add(baseName); // guard against self-referential unions
 		for (var entry : ut.getMemberScope().getSymbols().entrySet())
 		{
 			if (entry.getValue() instanceof org.nebula.nebc.semantic.symbol.MethodSymbol ms)

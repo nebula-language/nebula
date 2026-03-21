@@ -326,3 +326,43 @@ NebulaStr __nebula_rt_system_getcwd(void)
     int64_t len = neb_system_strlen(buf);
     return neb_cstr_to_str(buf, len);
 }
+
+// =============================================================================
+// __nebula_rt_system_getenv
+// =============================================================================
+//
+// Return the value of environment variable `name` as a Nebula str.
+// Returns an empty str ({ptr="", len=0}) if the variable is not set.
+// The returned str points directly into the process environment block,
+// which is stable for the lifetime of the process.
+
+extern char** environ;
+
+NebulaStr __nebula_rt_system_getenv(NebulaStr name)
+{
+    char* cname = neb_str_to_cstr(name);
+    if (!cname) return (NebulaStr){ (const uint8_t*)"", 0 };
+
+    int64_t nameLen = neb_system_strlen(cname);
+    char*   found   = (char*)0;
+
+    for (char** ep = environ; *ep; ep++)
+    {
+        char*   entry = *ep;
+        int64_t i;
+        for (i = 0; i < nameLen && entry[i] == cname[i]; i++);
+        if (i == nameLen && entry[i] == '=')
+        {
+            found = entry + nameLen + 1;
+            break;
+        }
+    }
+
+    neb_free(cname);
+
+    if (!found) return (NebulaStr){ (const uint8_t*)"", 0 };
+
+    // The env string lives in the process environment — safe to point at directly.
+    int64_t len = neb_system_strlen(found);
+    return (NebulaStr){ (const uint8_t*)found, len };
+}

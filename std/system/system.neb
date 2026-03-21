@@ -37,6 +37,7 @@ private extern "C"
     i32 __nebula_rt_system_mkdir_all(keeps str path);
     i32 __nebula_rt_system_rm_all(keeps str path);
     str __nebula_rt_system_getcwd();
+    str __nebula_rt_system_getenv(keeps str name);
 }
 
 // =============================================================================
@@ -88,6 +89,20 @@ i32 rmAll(keeps str path) => __nebula_rt_system_rm_all(path)
 str? getCwd()
 {
     str result = __nebula_rt_system_getcwd();
+    if (result.length() == 0) return none;
+    return result;
+}
+
+// =============================================================================
+// getenv — read an environment variable
+// =============================================================================
+//
+// Returns the value of environment variable `name`, or `none` if the
+// variable is not set (or is set to the empty string).
+
+str? getenv(keeps str name)
+{
+    str result = __nebula_rt_system_getenv(name);
     if (result.length() == 0) return none;
     return result;
 }

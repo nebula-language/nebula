@@ -1,8 +1,5 @@
 namespace std::collections;
 
-use std::collections::traits;
-use std::collections::entry;
-
 // =============================================================================
 // std::collections::ArrayList<T> — resizable array
 // =============================================================================
@@ -15,15 +12,7 @@ use std::collections::entry;
 // The backing array is managed entirely through the runtime allocator.
 // ArrayList itself has no CVT region (it is a class; CVT tracks its pointer).
 
-// Runtime helpers — implemented in runtime/core/allocator.c
-private extern "C"
-{
-    Ref neb_alloc(i64 size);
-    Ref neb_realloc(Ref ptr, i64 newSize);
-    void neb_free(drops Ref ptr);
-    void neb_memcpy(Ref dst, keeps Ref src, i64 bytes);
-    i64  neb_sizeof_ptr();   // pointer size on this platform (8 bytes on 64-bit)
-}
+// Runtime helpers 
 
 class ArrayList<T>
 {
@@ -59,6 +48,7 @@ class ArrayList<T>
         {
             this.grow();
         }
+        neb_ptr_store(this.data, this.count, element);
         this.count = this.count + 1;
     }
 
@@ -81,12 +71,18 @@ class ArrayList<T>
             result.add(this[i]);
         for (var i = 0; i < other.size(); i++)
             result.add(other[i]);
-        return result;
+        result
     }
 
     // -------------------------------------------------------------------------
     // Operators
     // -------------------------------------------------------------------------
+
+    // Element read: list[i]
+    T operator[](i64 index) => (T)neb_ptr_load(this.data, index)
+
+    // Element write: list[i] = value
+    void operator[]=(i64 index, T value) => neb_ptr_store(this.data, index, value)
 
     // Concatenate two lists.
     ArrayList<T> operator +(ArrayList<T> other) => this.concat(other)

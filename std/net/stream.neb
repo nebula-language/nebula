@@ -1,8 +1,5 @@
 namespace std::net;
 
-use std::net::ffi;
-use std::net::core;
-
 // =============================================================================
 // std::net::stream — buffered byte-stream I/O over a socket fd
 // =============================================================================

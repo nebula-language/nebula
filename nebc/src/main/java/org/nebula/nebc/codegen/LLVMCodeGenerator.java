@@ -547,8 +547,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			throw new CodegenException("Internal Error: Method " + node.name + " was never semantically validated.");
 		}
 
-		// If this is a generic method, skip normal emission unless we are specializing.
-		if (!symbol.getTypeParameters().isEmpty() && currentSubstitution == null)
+		// Skip template-only generic methods (methods declaring their own type params)
+		// unless we are specializing. Methods that only inherit type parameters from
+		// an enclosing generic type are emitted in erased form (ptr ABI).
+		if (currentSubstitution == null
+				&& node.typeParams != null
+				&& !node.typeParams.isEmpty())
 		{
 			return null;
 		}
@@ -772,7 +776,32 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	{
 		for (MethodDeclaration method : node.members)
 		{
-			method.accept(this);
+			// When the impl targets a tag type (e.g. `impl Stringable for Signed`),
+			// the same MethodDeclaration node was registered once per concrete type in
+			// the semantic analyzer.  getAllMethodSymbols() returns the full list so we
+			// can emit one LLVM function per concrete type.
+			List<org.nebula.nebc.semantic.symbol.MethodSymbol> allSymbols =
+					analyzer.getAllMethodSymbols(method);
+			if (allSymbols != null && allSymbols.size() > 1)
+			{
+				for (org.nebula.nebc.semantic.symbol.MethodSymbol sym : allSymbols)
+				{
+					org.nebula.nebc.semantic.symbol.Symbol prev =
+							analyzer.overrideNodeSymbol(method, sym);
+					try
+					{
+						method.accept(this);
+					}
+					finally
+					{
+						analyzer.restoreNodeSymbol(method, prev);
+					}
+				}
+			}
+			else
+			{
+				method.accept(this);
+			}
 		}
 		return null;
 	}
@@ -1051,31 +1080,172 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitClassDeclaration(ClassDeclaration node)
 	{
-		// Generic classes are only emitted when monomorphized — skip template declarations
-		if (node.typeParams != null && !node.typeParams.isEmpty())
-			return null;
+		// Emit all class members, including generic classes.
+		// Unsubstituted type parameters lower to opaque ptr via LLVMTypeMapper,
+		// giving a stable erased ABI for library symbols.
+		//
+		// If a method body references a trait-bound type parameter (e.g. K.hashCode()
+		// in HashMap.bucketIndex) we cannot emit a body without vtable dispatch. In that
+		// case we catch the CodegenException, strip any partially-built blocks from the
+		// function so it remains a valid forward declaration, and continue. The symbol
+		// will be exported by the .nebsym metadata and the forward-declared LLVM function
+		// keeps the correct type for call-site linking; the body will be provided by
+		// a future erased-bitcode mechanism.
+		boolean isGeneric = node.typeParams != null && !node.typeParams.isEmpty();
 		for (ASTNode member : node.members)
 		{
 			if (member instanceof MethodDeclaration || member instanceof ConstructorDeclaration)
 			{
-				member.accept(this);
+				if (!isGeneric)
+				{
+					member.accept(this);
+				}
+				else
+				{
+					emitGenericClassMemberSafe(member);
+				}
 			}
 		}
 		return null;
 	}
 
+	/**
+	 * Emits a single member of a generic class/struct, catching any
+	 * {@link CodegenException} that arises from unresolvable trait-method calls
+	 * on type parameters (e.g. {@code key.hashCode()} where {@code K: Hashable}).
+	 * After successful emission the resulting LLVM function is verified; if it
+	 * contains type errors (e.g. i32/i64 mismatch in a generic body), the body
+	 * is also stripped so the function remains a valid forward declaration.
+	 *
+	 * <p>On failure the partially-emitted basic blocks are deleted from the LLVM
+	 * function so it stays a valid external declaration, and a warning is logged.
+	 * The caller (library build) then continues with the next member.</p>
+	 */
+	private void emitGenericClassMemberSafe(ASTNode member)
+	{
+		// Save codegen state so we can roll back on failure
+		Map<String, LLVMValueRef> savedNamedValues    = new HashMap<>(namedValues);
+		Set<String>               savedInlineStructs  = new HashSet<>(inlineStructVars);
+		Map<String, Integer>      savedArrayCounts    = new HashMap<>(arrayElementCounts);
+		LLVMValueRef              savedFunction       = currentFunction;
+		boolean                   savedTerminated     = currentBlockTerminated;
+		boolean                   savedVoidMain       = currentFunctionIsVoidMain;
+		Type                      savedRetType        = currentMethodReturnType;
+		RegionTracker             savedRegionTracker  = regionTracker;
+		LLVMBasicBlockRef         savedInsertBlock    = LLVMGetInsertBlock(builder);
+
+		LLVMValueRef emittedFn = null;
+		try
+		{
+			LLVMValueRef result = (LLVMValueRef) member.accept(this);
+			// For ConstructorDeclaration/MethodDeclaration the accept() returns the function ref.
+			// If the call returned non-null, stash it for post-emission verification.
+			emittedFn = result;
+		}
+		catch (Exception e)
+		{
+			stripAndWarn(member, e.getMessage(), savedNamedValues, savedInlineStructs,
+					savedArrayCounts, savedFunction, savedTerminated, savedVoidMain,
+					savedRetType, savedRegionTracker, savedInsertBlock);
+			return;
+		}
+
+		// Post-emission: verify the function body (catches i32/i64 mismatches, wrong
+		// return types, etc. that arise from unerased generic type parameters).
+		if (emittedFn != null && !emittedFn.isNull()
+				&& LLVMIsAFunction(emittedFn) != null && !LLVMIsAFunction(emittedFn).isNull()
+				&& LLVMCountBasicBlocks(emittedFn) > 0)
+		{
+			boolean verifyFailed = (LLVMVerifyFunction(emittedFn, LLVMPrintMessageAction) != 0);
+			if (verifyFailed)
+			{
+				String memberName = (member instanceof MethodDeclaration md2) ? md2.name
+						: (member instanceof ConstructorDeclaration cd2) ? cd2.name
+						: "?";
+				Log.warn("Stripping invalid generic class member '" + memberName
+						+ "' — IR verification failed (type mismatch)");
+				LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(emittedFn);
+				while (bb != null && !bb.isNull())
+				{
+					LLVMBasicBlockRef next = LLVMGetNextBasicBlock(bb);
+					LLVMDeleteBasicBlock(bb);
+					bb = next;
+				}
+			}
+		}
+	}
+
+	/** Helper: strip partial basic blocks from {@code currentFunction} and restore codegen state. */
+	private void stripAndWarn(
+			ASTNode member,
+			String reason,
+			Map<String, LLVMValueRef> savedNamedValues,
+			Set<String>               savedInlineStructs,
+			Map<String, Integer>      savedArrayCounts,
+			LLVMValueRef              savedFunction,
+			boolean                   savedTerminated,
+			boolean                   savedVoidMain,
+			Type                      savedRetType,
+			RegionTracker             savedRegionTracker,
+			LLVMBasicBlockRef         savedInsertBlock)
+	{
+		String memberName = (member instanceof MethodDeclaration md) ? md.name
+				: (member instanceof ConstructorDeclaration cd) ? cd.name
+				: "?";
+		Log.warn("Skipping generic class member '" + memberName
+				+ "' — body codegen failed: " + reason);
+
+		// Remove any basic blocks that were partially added to the current function.
+		// The function stays in the module as a forward declaration (no body).
+		if (currentFunction != null && !currentFunction.isNull())
+		{
+			LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(currentFunction);
+			while (bb != null && !bb.isNull())
+			{
+				LLVMBasicBlockRef next = LLVMGetNextBasicBlock(bb);
+				LLVMDeleteBasicBlock(bb);
+				bb = next;
+			}
+		}
+
+		// Roll back all codegen state
+		namedValues.clear();
+		namedValues.putAll(savedNamedValues);
+		inlineStructVars.clear();
+		inlineStructVars.addAll(savedInlineStructs);
+		arrayElementCounts.clear();
+		arrayElementCounts.putAll(savedArrayCounts);
+		currentFunction          = savedFunction;
+		currentBlockTerminated   = savedTerminated;
+		currentFunctionIsVoidMain = savedVoidMain;
+		currentMethodReturnType  = savedRetType;
+		regionTracker            = savedRegionTracker;
+		if (savedInsertBlock != null && !savedInsertBlock.isNull())
+		{
+			LLVMPositionBuilderAtEnd(builder, savedInsertBlock);
+		}
+	}
+
 	@Override
 	public LLVMValueRef visitStructDeclaration(StructDeclaration node)
 	{
-		// Generic structs are only emitted when monomorphized — skip template declarations
-		if (node.typeParams != null && !node.typeParams.isEmpty())
-			return null;
+		// Emit all struct members, including generic structs.
+		// Unsubstituted type parameters lower to opaque ptr via LLVMTypeMapper,
+		// giving a stable erased ABI for library symbols.
+		boolean isGeneric = node.typeParams != null && !node.typeParams.isEmpty();
 		for (ASTNode member : node.members)
 		{
 			if (member instanceof MethodDeclaration || member instanceof ConstructorDeclaration
 					|| member instanceof OperatorDeclaration)
 			{
-				member.accept(this);
+				if (!isGeneric)
+				{
+					member.accept(this);
+				}
+				else
+				{
+					emitGenericClassMemberSafe(member);
+				}
 			}
 		}
 		return null;
@@ -1274,6 +1444,8 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	public LLVMValueRef visitUnionDeclaration(UnionDeclaration node)
 	{
 		// Register discriminant indices and record variant order for match codegen.
+		// Do this even for generic unions so that no-payload variant references
+		// (e.g. `return PutResult.Inserted`) can be resolved inside generic class methods.
 		List<String> order = new ArrayList<>();
 		for (int i = 0; i < node.variants.size(); i++)
 		{
@@ -1282,6 +1454,10 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			order.add(node.variants.get(i).name);
 		}
 		unionVariantOrder.put(node.name, order);
+
+		// Generic union declarations are templates — skip constructor codegen until monomorphized.
+		if (node.typeParams != null && !node.typeParams.isEmpty())
+			return null;
 
 		// Look up the union type from the semantic analyser
 		Type semType = null;
@@ -1513,11 +1689,8 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			throw new CodegenException("Internal Error: Constructor " + node.name + " was never semantically validated.");
 		}
 
-		// If this is a generic method, skip normal emission unless we are specializing.
-		if (!symbol.getTypeParameters().isEmpty() && currentSubstitution == null)
-		{
-			return null;
-		}
+		// Constructors never declare their own type parameters; for generic owning
+		// types we still emit an erased constructor ABI so libraries export symbols.
 
 		FunctionType funcType = symbol.getType();
 		// Apply the active substitution so that type parameters inherited from the
@@ -2775,6 +2948,16 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				LLVMBuildStore(builder, storeVal, gep);
 				return storeVal;
 			}
+
+			// Delegate to operator[]= overload on composite types
+			if (baseType instanceof CompositeType ct)
+			{
+				Symbol opSym = ct.getMemberScope().resolve("operator[]=");
+				if (opSym instanceof MethodSymbol ms)
+				{
+					return emitIndexSetOperatorCall(indexExpr, ms, ct, value);
+				}
+			}
 		}
 
 		throw new CodegenException("Unsupported assignment target: " + node.target.getClass().getSimpleName());
@@ -2981,6 +3164,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitInvocationExpression(InvocationExpression node)
 	{
+		Type targetTypeEarly = analyzer.getType(node.target);
+		if (targetTypeEarly instanceof StructType st && canEmitImplicitDefaultStructCtor(node, st))
+		{
+			return emitImplicitDefaultStructCtor(node, st);
+		}
+
 		LLVMValueRef function = null;
 
 		// ── Erased-mode: intercept trait-method calls on TypeParameterType receivers ──
@@ -3133,7 +3322,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		if (function == null)
 		{
-			throw new CodegenException("Could not resolve function target for call");
+			throw new CodegenException("Could not resolve function target for call: " + node.target);
 		}
 
 		Type targetType = analyzer.getType(node.target);
@@ -3161,7 +3350,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		if (ft.returnType == PrimitiveType.VOID
 				&& !ft.parameterTypes.isEmpty()
 				&& ft.parameterTypes.get(0) == PrimitiveType.REF
-				&& node.target instanceof IdentifierExpression ie)
+				&& node.target instanceof IdentifierExpression)
 		{
 			Symbol targetSym = analyzer.getSymbol(node.target, Symbol.class);
 			if (targetSym instanceof MethodSymbol ms2
@@ -3321,6 +3510,39 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		PointerPointer<LLVMValueRef> args = new PointerPointer<>(argsArr);
 		String callName = ft.returnType == PrimitiveType.VOID ? "" : "call_tmp";
+
+		// If the resolved LLVM function declaration expects pointer parameters
+		// (e.g. imported erased-generic std symbols), adapt mismatching value
+		// arguments by boxing them on the stack and passing their address.
+		if (function != null && !function.isNull())
+		{
+			int paramCount = LLVMCountParams(function);
+			if (paramCount == llvmArgCount)
+			{
+				for (int i = 0; i < llvmArgCount; i++)
+				{
+					LLVMValueRef arg = argsArr[i];
+					if (arg == null)
+						continue;
+
+					LLVMValueRef paramRef = LLVMGetParam(function, i);
+					LLVMTypeRef expectedType = paramRef != null ? LLVMTypeOf(paramRef) : null;
+					LLVMTypeRef actualType = LLVMTypeOf(arg);
+					if (expectedType == null || actualType == null)
+						continue;
+
+					if (LLVMGetTypeKind(expectedType) == LLVMPointerTypeKind
+							&& LLVMGetTypeKind(actualType) != LLVMPointerTypeKind)
+					{
+						LLVMValueRef boxedArg = emitEntryAlloca(actualType, "arg_box_" + i);
+						LLVMBuildStore(builder, arg, boxedArg);
+						argsArr[i] = boxedArg;
+					}
+				}
+
+				args = new PointerPointer<>(argsArr);
+			}
+		}
 
 		return LLVMBuildCall2(builder, llvmFuncType, function, args, llvmArgCount, callName);
 	}
@@ -3835,6 +4057,54 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		}
 	}
 
+	private boolean canEmitImplicitDefaultStructCtor(InvocationExpression node, StructType st)
+	{
+		if (!node.arguments.isEmpty())
+			return false;
+		if (!(node.target instanceof IdentifierExpression ie))
+			return false;
+
+		String simpleName = ie.name.contains("::")
+			? ie.name.substring(ie.name.lastIndexOf("::") + 2)
+			: ie.name;
+		Symbol ctorSym = st.getMemberScope().resolveLocal(simpleName);
+		if (ctorSym instanceof MethodSymbol)
+			return false;
+
+		Symbol targetSym = analyzer.getSymbol(node.target, Symbol.class);
+		if (!(targetSym instanceof TypeSymbol ts) || !(ts.getDeclarationNode() instanceof StructDeclaration sd))
+			return false;
+
+		for (Declaration member : sd.members)
+		{
+			if (member instanceof VariableDeclaration vd)
+			{
+				for (VariableDeclarator decl : vd.declarators)
+				{
+					if (!decl.hasInitializer())
+						return false;
+				}
+			}
+		}
+
+		return true;
+	}
+
+	private LLVMValueRef emitImplicitDefaultStructCtor(InvocationExpression node, StructType st)
+	{
+		Symbol targetSym = analyzer.getSymbol(node.target, Symbol.class);
+		if (!(targetSym instanceof TypeSymbol ts) || !(ts.getDeclarationNode() instanceof StructDeclaration sd))
+		{
+			throw new CodegenException("Cannot emit implicit default struct constructor without struct declaration: "
+				+ st.name());
+		}
+
+		LLVMTypeRef structLlvmType = LLVMTypeMapper.getOrCreateStructType(context, st);
+		LLVMValueRef tmp = LLVMBuildAlloca(builder, structLlvmType, st.name() + "_default_ctor");
+		initializeFields(tmp, st, sd.members);
+		return LLVMBuildLoad2(builder, structLlvmType, tmp, st.name() + "_default_val");
+	}
+
 	private LLVMValueRef emitMemberPointer(MemberAccessExpression node)
 	{
 		LLVMValueRef base = node.target.accept(this);
@@ -4078,6 +4348,46 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		LLVMValueRef[] args = {selfPtr, indexVal};
 		return LLVMBuildCall2(builder, toLLVMType(ms.getType()), func,
 				new PointerPointer<>(args), 2, "idx_result");
+	}
+
+	/**
+	 * Emits a call to a user-defined {@code operator[]=} method.
+	 * Convention: {@code (ptr this, indexArg, value) -> void}.
+	 */
+	private LLVMValueRef emitIndexSetOperatorCall(IndexExpression node, MethodSymbol ms,
+			CompositeType targetType, LLVMValueRef value)
+	{
+		LLVMValueRef targetVal = node.target.accept(this);
+		if (targetVal == null)
+			return null;
+
+		LLVMValueRef selfPtr;
+		if (LLVMGetTypeKind(LLVMTypeOf(targetVal)) == LLVMPointerTypeKind)
+		{
+			selfPtr = targetVal;
+		}
+		else
+		{
+			LLVMTypeRef structTy = LLVMTypeMapper.getOrCreateStructType(context, targetType);
+			selfPtr = emitEntryAlloca(structTy, "idxset_op_tmp");
+			LLVMBuildStore(builder, targetVal, selfPtr);
+		}
+
+		LLVMValueRef indexVal = node.indices.get(0).accept(this);
+		if (indexVal == null)
+			return null;
+
+		String mangledName = ms.getMangledName();
+		LLVMValueRef func = LLVMGetNamedFunction(module, mangledName);
+		if (func == null || func.isNull())
+		{
+			func = LLVMAddFunction(module, mangledName, toLLVMType(ms.getType()));
+		}
+
+		LLVMValueRef[] args = {selfPtr, indexVal, value};
+		LLVMBuildCall2(builder, toLLVMType(ms.getType()), func,
+				new PointerPointer<>(args), 3, "");
+		return value;
 	}
 
 	@Override

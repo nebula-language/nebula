@@ -8,7 +8,7 @@ Every time, before coding, read thoroughly these files ./cvt.md (Which defines t
 
 When recompiling the nebc compiler, ensure you're in the correct path ./nebula/nebc/:
   - For testing / verifying / iterating you can simply do `mvn compile` (as its faster) and then simply execute it with Java.
-  - The way to get the native image is with `mvn package`. That does generate a native binary at nebc/target/nebc. That's symlinked to `/usr/local/bin/nebc` so it'll be automatically updated in the path.
+  - The way to get the native image is with `mvn clean package native:compile`. That does generate a native binary at nebc/target/nebc. That's symlinked to `/usr/local/bin/nebc` so it'll be automatically updated in the path.
 
 To compile the standard library (std/) with nebc, use these flags:
 `nebc --library std/ -o neb --nostdlib` or the appropiate respective `java ...` command if testing with the .jar image.

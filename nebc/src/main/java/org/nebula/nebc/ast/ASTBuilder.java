@@ -408,6 +408,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
 		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 		String name = ctx.IDENTIFIER().getText();
+		List<GenericParam> typeParams = buildTypeParams(ctx.type_parameters());
 
 		List<UnionVariant> variants = new ArrayList<>();
 		if (ctx.union_body() != null)
@@ -424,7 +425,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			}
 		}
 
-		return new UnionDeclaration(span, name, variants, attrs);
+		return new UnionDeclaration(span, name, typeParams, variants, attrs);
 	}
 
 	@Override
@@ -1145,7 +1146,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			// Covers both a bare identifier ("Normal") and a qualified variant ("Form::Normal").
 			// In either case, we represent it as a TypePattern wrapping a NamedType so that
 			// the codegen can look it up via the discriminant tables.
-			String name = ctx.qualified_name().getText();
+			String name = ctx.qualified_name().getText().replace(".", "::");
 			TypeNode type = new NamedType(span, name, Collections.emptyList());
 			return new TypePattern(span, type, null);
 		}
@@ -1173,7 +1174,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
 		// Now uses qualified_name so variant can be written as Variant or Union::Variant
-		String variantName = ctx.qualified_name().getText();
+		String variantName = ctx.qualified_name().getText().replace(".", "::");
 		List<String> bindings = new ArrayList<>();
 		for (var id : ctx.binding_list().IDENTIFIER())
 			bindings.add(id.getText());

@@ -86,7 +86,7 @@ namespace_declaration
     ;
 
 qualified_name
-    : IDENTIFIER (DOUBLE_COLON IDENTIFIER)*
+    : IDENTIFIER ((DOUBLE_COLON | DOT) IDENTIFIER)*
     ;
 
 enum_declaration
@@ -241,7 +241,7 @@ destructuring_pattern
     ;
 
 binding_list
-    : IDENTIFIER (COMMA IDENTIFIER)*
+    : (IDENTIFIER | UNDERSCORE) (COMMA (IDENTIFIER | UNDERSCORE))*
     ;
 
 tuple_pattern
@@ -360,6 +360,7 @@ overloadable_operator
     | OP_EQ
     | OP_NE
     | OPEN_BRACKET CLOSE_BRACKET
+    | OPEN_BRACKET CLOSE_BRACKET ASSIGNMENT
     ;
 
 //=============================================================================
@@ -375,9 +376,9 @@ class_body
     ;
 
 class_member
-    : field_declaration
+    : operator_declaration
     | method_declaration
-    | operator_declaration
+    | field_declaration
     | constructor_declaration
     ;
 
@@ -390,9 +391,9 @@ struct_body
     ;
 
 struct_member
-    : field_declaration
+    : operator_declaration
     | method_declaration
-    | operator_declaration
+    | field_declaration
     | constructor_declaration
     ;
 

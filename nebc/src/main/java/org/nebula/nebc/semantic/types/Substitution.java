@@ -138,10 +138,16 @@ public class Substitution
         // Pre-create the result type and register it in the cache BEFORE iterating
         // over members so that self-referential types (e.g. "this" param in methods)
         // resolve to this new instance rather than triggering infinite recursion.
+        // Preserve the original kind: UnionType stays UnionType so the codegen
+        // can still map it to the correct tagged-union LLVM struct.
         String baseName = extractBaseName(ct.name());
-        CompositeType monoType = (ct instanceof StructType)
-            ? new StructType(monoName, null)
-            : new ClassType(monoName, null);
+        CompositeType monoType;
+        if (ct instanceof UnionType)
+            monoType = new UnionType(monoName, null);
+        else if (ct instanceof StructType)
+            monoType = new StructType(monoName, null);
+        else
+            monoType = new ClassType(monoName, null);
         monoCache.put(ct.name(), monoType);
 
         // Set the scope owner to a synthetic TypeSymbol using the generic's BASE name

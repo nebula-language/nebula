@@ -1,8 +1,5 @@
 namespace std::collections;
 
-use std::collections::traits;
-use std::collections::hash_map;
-
 // =============================================================================
 // std::collections::HashSet<T: Hashable> — unordered set
 // =============================================================================
@@ -41,8 +38,8 @@ class HashSet<T: Hashable>
         var result = this.map.remove(value);
         return match (result)
         {
-            Removed(_) => true,
-            Missing    => false
+            RemoveResult.Removed(_) => true,
+            RemoveResult.Missing    => false
         };
     }
 
@@ -57,7 +54,7 @@ class HashSet<T: Hashable>
     // -------------------------------------------------------------------------
 
     // Return a new set that is the union of this and other.
-    HashSet<T> union(keeps HashSet<T> other)
+    HashSet<T> getUnion(keeps HashSet<T> other)
     {
         var out    = new HashSet<T>();
         out.map    = this.map + other.map;
@@ -68,11 +65,11 @@ class HashSet<T: Hashable>
     // Operators
     // -------------------------------------------------------------------------
 
-    HashSet<T> operator +(HashSet<T> other) => this.union(other)
+    HashSet<T> operator+(HashSet<T> other) => this.getUnion(other)
 
-    bool operator ==(HashSet<T> other) => this.map == other.map
+    bool operator==(HashSet<T> other) => this.map == other.map
 
-    bool operator !=(HashSet<T> other) => !(this == other)
+    bool operator!=(HashSet<T> other) => !(this == other)
 }
 
 // =============================================================================

@@ -20,6 +20,55 @@ const str NEBULA_CLI_VERSION = "0.1.0";
 const str NEBULA_CLI_NAME    = "nebula";
 
 // =============================================================================
+// DepDir — result of resolving a dependency's library directory
+// =============================================================================
+
+union DepDir
+{
+    Found(str path),
+    NotFound
+}
+
+// =============================================================================
+// nebulaHome — resolve $NEBULA_HOME (defaults to $HOME/.nebula)
+// =============================================================================
+
+str nebulaHome()
+{
+    str fromEnv = std::system::getenv("NEBULA_HOME") ?? "";
+    if (fromEnv.length() > 0)
+    {
+        return fromEnv;
+    }
+
+    str home = std::system::getenv("HOME") ?? "";
+    if (home.length() == 0)
+    {
+        std::io::println("Warning: could not determine home directory. Using '.nebula'.");
+        return ".nebula";
+    }
+
+    return home.concat("/.nebula");
+}
+
+// =============================================================================
+// resolveDepDir — locate a versioned dependency directory under NEBULA_HOME
+// =============================================================================
+//
+// Looks for $NEBULA_HOME/lib/<name>-<version>/ and returns Found(path) if
+// it exists, or NotFound otherwise.
+
+DepDir resolveDepDir(keeps str name, keeps str version, keeps str nebHome)
+{
+    str depDir = nebHome.concat("/lib/").concat(name).concat("-").concat(version);
+    if (std::fs::exists(depDir))
+    {
+        return DepDir.Found(depDir);
+    }
+    return DepDir.NotFound;
+}
+
+// =============================================================================
 // dispatch — route a parsed command to its handler
 // =============================================================================
 
@@ -206,21 +255,44 @@ i32 cmdBuild(keeps ParsedArgs parsed, keeps Project proj)
 
     // ── Resolve and link each non-std dependency ──────────────────────────
 
+    str nebHome = nebulaHome();
+
     for (i < proj.depCount)
     {
-        str depName = proj.dependencies[i].name;
+        str depName    = proj.dependencies[i].name;
+        str depVersion = proj.dependencies[i].version;
 
-        // std is linked automatically by nebc; skip it
+        // std is handled internally by nebc via $NEBULA_HOME — skip it here.
         if (depName.equals("std"))
         {
             continue;
         }
 
-        str symPath = "lib/".concat(depName).concat("/").concat(depName).concat(".nebsym");
-        str libDir  = "lib/".concat(depName);
+        // Locate the dependency directory.
+        DepDir depDir = resolveDepDir(depName, depVersion, nebHome);
+
+        str resolvedDir = match (depDir)
+        {
+            Found(path) => path,
+            NotFound    =>
+            {
+                std::io::println($"Error: dependency '{depName}' v{depVersion} not found.");
+                std::io::println($"  Searched: {nebHome}/lib/{depName}-{depVersion}/");
+                std::io::println("  Install it or check your NEBULA_HOME setting.");
+                return 1;
+            }
+        };
+
+        str symPath = resolvedDir.concat("/").concat(depName).concat(".nebsym");
+        if (!std::fs::exists(symPath))
+        {
+            std::io::println($"Error: symbols for '{depName}' not found at: {symPath}");
+            std::io::println("  The library installation may be incomplete.");
+            return 1;
+        }
 
         cmd = cmd.concat(" -s ").concat(symPath);
-        cmd = cmd.concat(" -L ").concat(libDir);
+        cmd = cmd.concat(" -L ").concat(resolvedDir);
         cmd = cmd.concat(" -l ").concat(depName);
     }
 
