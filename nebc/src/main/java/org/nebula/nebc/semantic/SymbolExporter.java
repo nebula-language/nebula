@@ -209,6 +209,7 @@ public class SymbolExporter
         JsonObject obj = new JsonObject();
         Type type = ts.getType();
         obj.addProperty("name", ts.getName());
+        obj.addProperty("is_private", ts.isPrivate());
 
         if (type instanceof StructType st)
         {

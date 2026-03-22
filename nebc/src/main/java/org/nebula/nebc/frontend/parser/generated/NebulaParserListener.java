@@ -1020,16 +1020,6 @@ public interface NebulaParserListener extends ParseTreeListener {
 	 */
 	void exitNull_coalescing_expression(NebulaParser.Null_coalescing_expressionContext ctx);
 	/**
-	 * Enter a parse tree produced by {@link NebulaParser#new_expression}.
-	 * @param ctx the parse tree
-	 */
-	void enterNew_expression(NebulaParser.New_expressionContext ctx);
-	/**
-	 * Exit a parse tree produced by {@link NebulaParser#new_expression}.
-	 * @param ctx the parse tree
-	 */
-	void exitNew_expression(NebulaParser.New_expressionContext ctx);
-	/**
 	 * Enter a parse tree produced by {@link NebulaParser#assignment_operator}.
 	 * @param ctx the parse tree
 	 */

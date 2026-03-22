@@ -87,7 +87,7 @@ public class Desugarer implements ASTVisitor<ASTNode>
 				decls.add(decl);
 			}
 		}
-		return new VariableDeclaration(node.getSpan(), node.type, decls, node.isVar, node.isBacklink, node.attributes);
+		return new VariableDeclaration(node.getSpan(), node.type, node.modifiers, decls, node.isVar, node.isBacklink, node.attributes, node.isConst);
 	}
 
 	@Override
@@ -112,7 +112,7 @@ public class Desugarer implements ASTVisitor<ASTNode>
 		{
 			members.add((Declaration) node.members.get(i).accept(this));
 		}
-		return new StructDeclaration(node.getSpan(), node.name, node.typeParams, node.inheritance, members, node.attributes);
+		return new StructDeclaration(node.getSpan(), node.isPrivate, node.name, node.typeParams, node.inheritance, members, node.attributes);
 	}
 
 	@Override

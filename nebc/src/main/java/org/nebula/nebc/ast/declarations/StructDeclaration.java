@@ -10,15 +10,17 @@ import java.util.List;
 
 public class StructDeclaration extends Declaration
 {
+	public final boolean isPrivate;
 	public final String name;
 	public final List<GenericParam> typeParams;
 	public final List<TypeNode> inheritance;
 	public final List<Declaration> members;
 	public final List<AttributeNode> attributes;
 
-	public StructDeclaration(SourceSpan span, String name, List<GenericParam> typeParams, List<TypeNode> inheritance, List<Declaration> members, List<AttributeNode> attributes)
+	public StructDeclaration(SourceSpan span, boolean isPrivate, String name, List<GenericParam> typeParams, List<TypeNode> inheritance, List<Declaration> members, List<AttributeNode> attributes)
 	{
 		super(span);
+		this.isPrivate = isPrivate;
 		this.name = name;
 		this.typeParams = typeParams;
 		this.inheritance = inheritance;
@@ -26,10 +28,15 @@ public class StructDeclaration extends Declaration
 		this.attributes = Collections.unmodifiableList(attributes);
 	}
 
+	public StructDeclaration(SourceSpan span, String name, List<GenericParam> typeParams, List<TypeNode> inheritance, List<Declaration> members, List<AttributeNode> attributes)
+	{
+		this(span, false, name, typeParams, inheritance, members, attributes);
+	}
+
 	/** Backwards-compatible overload — no attributes. */
 	public StructDeclaration(SourceSpan span, String name, List<GenericParam> typeParams, List<TypeNode> inheritance, List<Declaration> members)
 	{
-		this(span, name, typeParams, inheritance, members, Collections.emptyList());
+		this(span, false, name, typeParams, inheritance, members, Collections.emptyList());
 	}
 
 	@Override

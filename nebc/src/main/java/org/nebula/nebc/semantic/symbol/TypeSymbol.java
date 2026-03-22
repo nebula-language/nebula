@@ -16,10 +16,17 @@ import org.nebula.nebc.semantic.types.Type;
  */
 public final class TypeSymbol extends Symbol
 {
+	private final boolean isPrivate;
 
 	public TypeSymbol(String name, Type type, ASTNode declarationNode)
 	{
+		this(name, type, declarationNode, false);
+	}
+
+	public TypeSymbol(String name, Type type, ASTNode declarationNode, boolean isPrivate)
+	{
 		super(name, type, declarationNode);
+		this.isPrivate = isPrivate;
 	}
 
 	/**
@@ -28,5 +35,10 @@ public final class TypeSymbol extends Symbol
 	public static TypeSymbol builtIn(String name, Type type)
 	{
 		return new TypeSymbol(name, type, null);
+	}
+
+	public boolean isPrivate()
+	{
+		return isPrivate;
 	}
 }

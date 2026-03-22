@@ -4,6 +4,7 @@ import org.nebula.nebc.ast.ASTNode;
 import org.nebula.nebc.ast.ASTVisitor;
 import org.nebula.nebc.ast.CompilationUnit;
 import org.nebula.nebc.ast.GenericParam;
+import org.nebula.nebc.ast.Modifier;
 import org.nebula.nebc.ast.Parameter;
 import org.nebula.nebc.ast.declarations.*;
 import org.nebula.nebc.ast.expressions.*;
@@ -265,7 +266,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			else if (decl instanceof StructDeclaration sd)
 			{
 				StructType structType = new StructType(sd.name, currentScope);
-				TypeSymbol sym = new TypeSymbol(sd.name, structType, sd);
+				TypeSymbol sym = new TypeSymbol(sd.name, structType, sd, sd.isPrivate);
 				structType.getMemberScope().setOwner(sym);
 				if (!currentScope.forceDefine(sym))
 				{
@@ -785,7 +786,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		if (node.targetType instanceof NamedType implNt && !implNt.genericArguments.isEmpty())
 		{
 			TypeSymbol baseSym = currentScope.resolveType(implNt.qualifiedName);
-			if (baseSym != null && baseSym.getType() instanceof CompositeType baseCt)
+			if (baseSym != null && isTypeAccessible(baseSym) && baseSym.getType() instanceof CompositeType baseCt)
 			{
 				preImplScope = currentScope;
 				currentScope = new SymbolTable(preImplScope);
@@ -1053,10 +1054,9 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 
 		if (astType instanceof NamedType nt)
 		{
-			TypeSymbol ts = currentScope.resolveType(nt.qualifiedName);
+			TypeSymbol ts = resolveAccessibleTypeSymbol(nt.qualifiedName, astType);
 			if (ts == null)
 			{
-				error(DiagnosticCode.UNKNOWN_TYPE, astType, nt.qualifiedName);
 				return Type.ERROR;
 			}
 			Type baseType = ts.getType();
@@ -1240,6 +1240,14 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		{
 			if (member instanceof VariableDeclaration vd && !vd.isVar)
 			{
+				for (VariableDeclarator decl : vd.declarators)
+				{
+					if (decl.hasInitializer())
+					{
+						error(DiagnosticCode.FIELD_INITIALIZER_NOT_ALLOWED_IN_TYPE, decl.initializer(), decl.name());
+					}
+				}
+
 				// Only pre-register if all declarators lack an initializer (struct fields)
 				boolean allNoInit = vd.declarators.stream().noneMatch(VariableDeclarator::hasInitializer);
 				if (allNoInit)
@@ -1659,7 +1667,9 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		// but we short-circuit here to avoid cascading errors.
 		if (explicitType instanceof TagType)
 			return null;
-		boolean mutable = node.isVar; // var = mutable, explicit type = immutable by default
+		boolean inTypeMemberScope = currentTypeDefinition instanceof CompositeType ct
+			&& currentScope == ct.getMemberScope();
+		boolean mutable = node.isVar || (inTypeMemberScope && !node.isConst);
 
 		for (VariableDeclarator decl : node.declarators)
 		{
@@ -2160,9 +2170,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		}
 		else if (targetType instanceof CompositeType compositeTarget)
 		{
-			// Type instantiation — the identifier resolved directly to the TypeSymbol.
-			// First check for an explicit constructor MethodSymbol (legacy / imported);
-			// if none exists, treat arguments as positional field initialization.
+			// Type invocation — the identifier resolved directly to a TypeSymbol.
+			// Nebula requires explicit constructors for value construction.
 			if (node.target instanceof IdentifierExpression ie)
 			{
 				String ctorKey = ie.name.contains("::")
@@ -2211,71 +2220,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				}
 				else
 				{
-					// Direct initialization: T(val1, val2, ...) — positional field init.
-					// Collect the ordered field types from the member scope.
-					List<String> fieldNames = new java.util.ArrayList<>();
-					List<Type> fieldTypes = new java.util.ArrayList<>();
-					for (Symbol s : compositeTarget.getMemberScope().getSymbols().values())
-					{
-						if (s instanceof VariableSymbol vs && !vs.getName().equals("this"))
-						{
-							fieldNames.add(vs.getName());
-							fieldTypes.add(vs.getType());
-						}
-					}
-
-					if (node.arguments.isEmpty() && !fieldTypes.isEmpty())
-					{
-						// Zero-arg with fields — allow only if all fields have defaults
-						// (handled downstream by canEmitImplicitDefaultStructCtor)
-						fn = null;
-					}
-					else if (node.arguments.size() != fieldTypes.size())
-					{
-						error(DiagnosticCode.ARGUMENT_COUNT_MISMATCH, node,
-								fieldTypes.size(), node.arguments.size());
-						return Type.ERROR;
-					}
-					else
-					{
-						// Generic inference: if any field is a TypeParameterType, infer from args.
-						boolean hasTypeParams = fieldTypes.stream().anyMatch(t -> t instanceof TypeParameterType);
-						if (hasTypeParams)
-						{
-							Substitution fieldSub = new Substitution();
-							for (int i = 0; i < node.arguments.size(); i++)
-							{
-								Type argType = node.arguments.get(i).accept(this);
-								infer(fieldTypes.get(i), argType, fieldSub);
-							}
-							if (!fieldSub.isEmpty())
-							{
-								List<Type> concreteFields = fieldTypes.stream()
-									.map(fieldSub::substitute)
-									.collect(java.util.stream.Collectors.toList());
-								Type concreteReturn = fieldSub.substitute(compositeTarget);
-								fn = new FunctionType(concreteReturn, concreteFields);
-								targetType = concreteReturn;
-								methodSym = null;
-								List<Type> typeArgsList = new java.util.ArrayList<>();
-								for (java.util.Map.Entry<TypeParameterType, Type> entry : fieldSub.getMapping().entrySet())
-								{
-									typeArgsList.add(entry.getValue());
-								}
-								node.setTypeArguments(typeArgsList);
-							}
-							else
-							{
-								fn = null;
-							}
-						}
-						else
-						{
-							// Non-generic direct init: build a FunctionType matching the fields.
-							fn = new FunctionType(compositeTarget, fieldTypes);
-							methodSym = null;
-						}
-					}
+					error(DiagnosticCode.STRUCT_MISSING_CONSTRUCTOR, node, compositeTarget.name());
+					return Type.ERROR;
 				}
 			}
 			else
@@ -2301,6 +2247,11 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				receiverVariable = vs;
 				receiverSubstitution = receiverTypeInference.get(vs);
 			}
+		}
+
+		if (fn != null)
+		{
+			normalizeInvocationArguments(node, fn, methodSym);
 		}
 		if (fn != null)
 		{
@@ -2686,6 +2637,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		}
 
 		Type result = memberSym.getType();
+
+		if (isPrivateSymbol(memberSym) && !isSameDeclaringTypeAccess(objectType))
+		{
+			error(DiagnosticCode.PRIVATE_MEMBER_ACCESS, node, node.memberName, objectType.name());
+			return Type.ERROR;
+		}
+
 		recordSymbol(node, memberSym);
 		recordType(node, result);
 		return result;
@@ -2709,6 +2667,12 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			{
 				error(DiagnosticCode.UNDEFINED_SYMBOL, node, node.name);
 			}
+			return Type.ERROR;
+		}
+
+		if (sym instanceof TypeSymbol ts && !isTypeAccessible(ts))
+		{
+			error(DiagnosticCode.PRIVATE_TYPE_ACCESS, node, node.name);
 			return Type.ERROR;
 		}
 
@@ -2761,12 +2725,9 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		String baseName = node.typeName.contains("<")
 			? node.typeName.substring(0, node.typeName.indexOf('<'))
 			: node.typeName;
-		TypeSymbol ts = currentScope.resolveType(baseName);
+		TypeSymbol ts = resolveAccessibleTypeSymbol(baseName, node);
 		if (ts == null)
-		{
-			error(DiagnosticCode.UNKNOWN_TYPE, node, baseName);
 			return Type.ERROR;
-		}
 		if (ts.getType() instanceof TagType tag)
 		{
 			error(DiagnosticCode.TAG_AS_VALUE_TYPE, node, tag.name(), tag.name());
@@ -2879,6 +2840,14 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		if (targetType == Type.ERROR || valueType == Type.ERROR)
 			return Type.ERROR;
 
+		VariableSymbol targetVariable = getSymbol(node.target, VariableSymbol.class);
+		if (targetVariable != null
+				&& isConstSymbol(targetVariable))
+		{
+			error(DiagnosticCode.IMMUTABLE_ASSIGNMENT, node, targetVariable.getName());
+			return Type.ERROR;
+		}
+
 		// operator[]= on composite types: the "target type" as reported by visitIndexExpression
 		// is the element read type from operator[], but the write is handled by operator[]=.
 		// We need to type-check the value against operator[]='s value parameter instead.
@@ -2921,6 +2890,20 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		// than silently slipping through to codegen.
 		recordType(node, PrimitiveType.VOID);
 		return PrimitiveType.VOID;
+	}
+
+	private boolean isConstSymbol(VariableSymbol symbol)
+	{
+		if (symbol == null)
+			return false;
+
+		ASTNode declNode = symbol.getDeclarationNode();
+		if (declNode instanceof ConstDeclaration)
+			return true;
+		if (declNode instanceof VariableDeclaration vd)
+			return vd.isConst;
+
+		return false;
 	}
 
 	@Override
@@ -3851,54 +3834,50 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	@Override
 	public Type visitTupleLiteralExpression(TupleLiteralExpression node)
 	{
-		// Check if a contextual struct type is expected (e.g. from variable declaration,
-		// return type, or assignment target).  If so, coerce this tuple literal into a
-		// positional struct initialization.
 		Type expected = expectedExpressionType;
 		if (expected == null)
-			expected = currentMethodReturnType;   // arrow body / return statement
+			expected = currentMethodReturnType;
 
 		if (expected instanceof CompositeType ct)
 		{
-			// Collect the ordered fields from the target type's member scope.
-			java.util.List<org.nebula.nebc.semantic.symbol.VariableSymbol> orderedFields = new java.util.ArrayList<>();
-			for (org.nebula.nebc.semantic.symbol.Symbol s : ct.getMemberScope().getSymbols().values())
+			List<VariableSymbol> orderedFields = getOrderedCompositeFields(ct);
+			for (VariableSymbol field : orderedFields)
 			{
-				if (s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs && !vs.getName().equals("this"))
-					orderedFields.add(vs);
-			}
-
-			if (node.elements.size() > orderedFields.size())
-			{
-				error(DiagnosticCode.ARGUMENT_COUNT_MISMATCH, node,
-						orderedFields.size(), node.elements.size());
-			}
-			else
-			{
-				// Type-check each element against the corresponding field.
-				for (int i = 0; i < node.elements.size(); i++)
+				if (isPrivateSymbol(field) && !isSameDeclaringTypeAccess(ct))
 				{
-					Type elemType = node.elements.get(i).accept(this);
-					Type fieldType = orderedFields.get(i).getType();
-					if (elemType != Type.ERROR && !elemType.isAssignableTo(fieldType))
-					{
-						// Allow integer literal narrowing
-						boolean narrowing = elemType instanceof PrimitiveType pi && pi.isInteger()
-								&& fieldType instanceof PrimitiveType pf && pf.isInteger()
-								&& node.elements.get(i) instanceof org.nebula.nebc.ast.expressions.LiteralExpression lit
-								&& lit.value instanceof Long lv && intLiteralFitsInType(lv, pf);
-						if (!narrowing)
-							error(DiagnosticCode.TYPE_MISMATCH, node.elements.get(i), fieldType.name(), elemType.name());
-					}
+					error(DiagnosticCode.TUPLE_CONSTRUCTION_INACCESSIBLE_FIELD, node, ct.name(), field.getName());
+					recordType(node, Type.ERROR);
+					return Type.ERROR;
 				}
 			}
 
-			// Record the composite type — codegen uses this to emit struct init.
+			if (node.elements.size() != orderedFields.size())
+			{
+				error(DiagnosticCode.ARGUMENT_COUNT_MISMATCH, node,
+					orderedFields.size(), node.elements.size());
+				recordType(node, Type.ERROR);
+				return Type.ERROR;
+			}
+
+			for (int i = 0; i < node.elements.size(); i++)
+			{
+				Type elemType = node.elements.get(i).accept(this);
+				Type fieldType = orderedFields.get(i).getType();
+				if (elemType != Type.ERROR && !elemType.isAssignableTo(fieldType))
+				{
+					boolean narrowing = elemType instanceof PrimitiveType pi && pi.isInteger()
+						&& fieldType instanceof PrimitiveType pf && pf.isInteger()
+						&& node.elements.get(i) instanceof LiteralExpression lit
+						&& lit.value instanceof Long lv && intLiteralFitsInType(lv, pf);
+					if (!narrowing)
+						error(DiagnosticCode.TYPE_MISMATCH, node.elements.get(i), fieldType.name(), elemType.name());
+				}
+			}
+
 			recordType(node, ct);
 			return ct;
 		}
 
-		// Default: treat as a plain tuple.
 		List<Type> elementTypes = new ArrayList<>();
 		for (Expression expr : node.elements)
 		{
@@ -3907,6 +3886,193 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		TupleType result = new TupleType(elementTypes);
 		recordType(node, result);
 		return result;
+	}
+
+	private List<VariableSymbol> getOrderedCompositeFields(CompositeType type)
+	{
+		List<VariableSymbol> orderedFields = new ArrayList<>();
+		for (Symbol s : type.getMemberScope().getSymbols().values())
+		{
+			if (s instanceof VariableSymbol vs && !vs.getName().equals("this"))
+				orderedFields.add(vs);
+		}
+		return orderedFields;
+	}
+
+	private TypeSymbol resolveAccessibleTypeSymbol(String name, ASTNode site)
+	{
+		TypeSymbol ts = currentScope.resolveType(name);
+		if (ts == null)
+		{
+			error(DiagnosticCode.UNKNOWN_TYPE, site, name);
+			return null;
+		}
+		if (!isTypeAccessible(ts))
+		{
+			error(DiagnosticCode.PRIVATE_TYPE_ACCESS, site, name);
+			return null;
+		}
+		return ts;
+	}
+
+	private boolean isTypeAccessible(TypeSymbol typeSymbol)
+	{
+		if (typeSymbol == null || !typeSymbol.isPrivate())
+			return true;
+
+		NamespaceSymbol currentNamespace = getEnclosingNamespace(currentScope);
+		NamespaceSymbol ownerNamespace = getEnclosingNamespace(typeSymbol.getDefinedIn());
+		String currentName = currentNamespace != null ? currentNamespace.getQualifiedName() : "";
+		String ownerName = ownerNamespace != null ? ownerNamespace.getQualifiedName() : "";
+		return currentName.equals(ownerName);
+	}
+
+	private NamespaceSymbol getEnclosingNamespace(SymbolTable scope)
+	{
+		SymbolTable cursor = scope;
+		while (cursor != null)
+		{
+			if (cursor.getOwner() instanceof NamespaceSymbol ns)
+				return ns;
+			cursor = cursor.getParent();
+		}
+		return null;
+	}
+
+	private boolean isPrivateSymbol(Symbol symbol)
+	{
+		if (symbol instanceof MethodSymbol ms)
+		{
+			return ms.hasModifier(Modifier.PRIVATE);
+		}
+
+		if (symbol instanceof VariableSymbol vs)
+		{
+			ASTNode decl = vs.getDeclarationNode();
+			if (decl instanceof VariableDeclaration vd)
+			{
+				return vd.modifiers.contains(Modifier.PRIVATE);
+			}
+		}
+
+		return false;
+	}
+
+	private boolean isSameDeclaringTypeAccess(Type objectType)
+	{
+		if (!(objectType instanceof CompositeType targetComposite))
+			return false;
+		if (!(currentTypeDefinition instanceof CompositeType currentComposite))
+			return false;
+
+		return compositeBaseName(targetComposite.name()).equals(compositeBaseName(currentComposite.name()));
+	}
+
+	private List<Parameter> getDeclaredParameters(MethodSymbol methodSym)
+	{
+		if (methodSym == null)
+			return java.util.Collections.emptyList();
+
+		ASTNode decl = methodSym.getDeclarationNode();
+		if (decl instanceof MethodDeclaration md)
+			return md.parameters;
+		if (decl instanceof ConstructorDeclaration cd)
+			return cd.parameters;
+
+		return java.util.Collections.emptyList();
+	}
+
+	private void normalizeInvocationArguments(InvocationExpression node, FunctionType fn, MethodSymbol methodSym)
+	{
+		List<NamedArgumentExpression> namedInOrder = new ArrayList<>();
+		List<Expression> positionalInOrder = new ArrayList<>();
+		boolean seenNamed = false;
+
+		for (Expression arg : node.arguments)
+		{
+			if (arg instanceof NamedArgumentExpression namedArg)
+			{
+				seenNamed = true;
+				namedInOrder.add(namedArg);
+			}
+			else
+			{
+				if (seenNamed)
+				{
+					error(DiagnosticCode.POSITIONAL_AFTER_NAMED_ARGUMENT, arg);
+				}
+				positionalInOrder.add(arg);
+			}
+		}
+
+		List<Parameter> declaredParams = getDeclaredParameters(methodSym);
+		if (declaredParams.isEmpty())
+		{
+			if (namedInOrder.isEmpty())
+				return;
+			for (NamedArgumentExpression named : namedInOrder)
+			{
+				error(DiagnosticCode.UNKNOWN_NAMED_ARGUMENT, named, named.name);
+			}
+			return;
+		}
+
+		if (namedInOrder.isEmpty() && positionalInOrder.size() == declaredParams.size())
+			return;
+
+		Map<String, Expression> namedArgs = new HashMap<>();
+		for (NamedArgumentExpression named : namedInOrder)
+		{
+			if (namedArgs.containsKey(named.name))
+			{
+				error(DiagnosticCode.DUPLICATE_ARGUMENT, named, named.name);
+				continue;
+			}
+			namedArgs.put(named.name, named.value);
+		}
+
+		List<Expression> ordered = new ArrayList<>(declaredParams.size());
+		for (int i = 0; i < declaredParams.size(); i++)
+		{
+			Parameter param = declaredParams.get(i);
+			if (i < positionalInOrder.size())
+			{
+				if (namedArgs.containsKey(param.name()))
+				{
+					error(DiagnosticCode.DUPLICATE_ARGUMENT, node, param.name());
+				}
+				ordered.add(positionalInOrder.get(i));
+				continue;
+			}
+
+			Expression namedValue = namedArgs.remove(param.name());
+			if (namedValue != null)
+			{
+				ordered.add(namedValue);
+				continue;
+			}
+
+			if (param.defaultValue() != null)
+			{
+				ordered.add(param.defaultValue());
+				continue;
+			}
+
+			error(DiagnosticCode.MISSING_REQUIRED_ARGUMENT, node, param.name());
+		}
+
+		if (positionalInOrder.size() > declaredParams.size())
+		{
+			error(DiagnosticCode.ARGUMENT_COUNT_MISMATCH, node, declaredParams.size(), positionalInOrder.size());
+		}
+
+		for (Map.Entry<String, Expression> remaining : namedArgs.entrySet())
+		{
+			error(DiagnosticCode.UNKNOWN_NAMED_ARGUMENT, remaining.getValue(), remaining.getKey());
+		}
+
+		node.arguments.clear();
+		node.arguments.addAll(ordered);
 	}
 
 	@Override
@@ -4106,7 +4272,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		if (node.targetType instanceof NamedType implNt && !implNt.genericArguments.isEmpty())
 		{
 			TypeSymbol baseSym = currentScope.resolveType(implNt.qualifiedName);
-			if (baseSym != null && baseSym.getType() instanceof CompositeType baseCt)
+			if (baseSym != null && isTypeAccessible(baseSym) && baseSym.getType() instanceof CompositeType baseCt)
 			{
 				preImplScope = currentScope;
 				currentScope = new SymbolTable(preImplScope);
@@ -4263,12 +4429,9 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		Type targetType;
 		if (node.targetType instanceof NamedType implNt)
 		{
-			TypeSymbol baseSym = currentScope.resolveType(implNt.qualifiedName);
+			TypeSymbol baseSym = resolveAccessibleTypeSymbol(implNt.qualifiedName, node.targetType);
 			if (baseSym == null)
-			{
-				error(DiagnosticCode.UNKNOWN_TYPE, node.targetType, implNt.qualifiedName);
 				return null;
-			}
 			targetType = baseSym.getType();
 		}
 		else
@@ -4349,7 +4512,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		if (node.targetType instanceof NamedType implNt)
 		{
 			TypeSymbol baseSym = currentScope.resolveType(implNt.qualifiedName);
-			if (baseSym == null)
+			if (baseSym == null || !isTypeAccessible(baseSym))
 				return;
 			targetType = baseSym.getType();
 		}
@@ -4730,9 +4893,14 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		}
 		else if (sym instanceof TypeSymbol ts)
 		{
+			if (!isTypeAccessible(ts))
+			{
+				error(DiagnosticCode.PRIVATE_TYPE_ACCESS, node, node.qualifiedName);
+				return null;
+			}
 			// Direct type import (e.g. use MyEnum;): allow using variant names unqualified
 			String localName = (node.alias != null) ? node.alias : ts.getName();
-			currentScope.importSymbol(localName, ts);
+			currentScope.alias(localName, ts);
 		}
 		else if (sym != null)
 		{
@@ -4777,8 +4945,17 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			return;
 		}
 
+		if (target instanceof TypeSymbol ts && !isTypeAccessible(ts))
+		{
+			error(DiagnosticCode.PRIVATE_TYPE_ACCESS, node, basePath + "::" + itemName);
+			return;
+		}
+
 		String localName = (alias != null) ? alias : itemName;
-		currentScope.importSymbol(localName, target);
+		if (target instanceof TypeSymbol ts)
+			currentScope.alias(localName, ts);
+		else
+			currentScope.importSymbol(localName, target);
 	}
 
 	/**
@@ -4796,7 +4973,14 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			return ns.getMemberTable();
 
 		if (sym instanceof TypeSymbol ts && ts.getType() instanceof CompositeType ct)
+		{
+			if (!isTypeAccessible(ts))
+			{
+				error(DiagnosticCode.PRIVATE_TYPE_ACCESS, node, path);
+				return null;
+			}
 			return ct.getMemberScope();
+		}
 
 		if (sym == null)
 			error(DiagnosticCode.UNDEFINED_SYMBOL, node, path);

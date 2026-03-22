@@ -54,7 +54,6 @@ MUTATES: 'mutates';
 BACKLINK: 'backlink';
 NAMESPACE: 'namespace';
 NONE: 'none';
-NEW: 'new';
 MATCH: 'match';
 OPERATOR: 'operator';
 PRIVATE: 'private';

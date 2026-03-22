@@ -316,13 +316,14 @@ public class SymbolImporter
             String kind)
     {
         String        name = obj.get("name").getAsString();
+        boolean       isPrivate = obj.has("is_private") && obj.get("is_private").getAsBoolean();
         CompositeType type;
         if (kind.equals("class") || kind.equals("struct"))
             type = new StructType(name, table);
         else
             type = new TraitType(name, table);
 
-        TypeSymbol sym = new TypeSymbol(name, type, null);
+        TypeSymbol sym = new TypeSymbol(name, type, null, isPrivate);
         type.getMemberScope().setOwner(sym);
 
         // Pre-register the TypeSymbol in the outer table BEFORE importing member
@@ -369,8 +370,9 @@ public class SymbolImporter
     private TypeSymbol importEnumType(JsonObject obj, SymbolTable table)
     {
         String   name = obj.get("name").getAsString();
+        boolean  isPrivate = obj.has("is_private") && obj.get("is_private").getAsBoolean();
         EnumType type = new EnumType(name, table);
-        TypeSymbol sym = new TypeSymbol(name, type, null);
+        TypeSymbol sym = new TypeSymbol(name, type, null, isPrivate);
         type.getMemberScope().setOwner(sym);
 
         if (obj.has("variants"))

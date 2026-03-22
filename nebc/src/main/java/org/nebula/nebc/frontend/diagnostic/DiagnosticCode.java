@@ -7,6 +7,7 @@ public enum DiagnosticCode
 
 	// --- Symbols & Types ---
 	UNDEFINED_SYMBOL("Undefined symbol '%s'."), DUPLICATE_SYMBOL("Symbol '%s' is already defined."), UNKNOWN_TYPE("Unknown type '%s'."), TYPE_ALREADY_DEFINED("Type '%s' is already defined."), TYPE_MISMATCH("Type mismatch. Expected '%s', got '%s'."), NOT_CALLABLE("Expression of type '%s' is not callable."), NOT_HAS_MEMBERS("Type '%s' does not have members."), MEMBER_NOT_FOUND("Member '%s' not found in type '%s'."), DUPLICATE_PARAMETER("Duplicate parameter '%s'."),
+	PRIVATE_TYPE_ACCESS("Type '%s' is private and cannot be accessed from this scope."),
 	UNQUALIFIED_ENUM_VARIANT("Enum variant '%s' must be qualified as '%s::%s', or import variants with 'use %s::*'."),
 
 	// --- Syntax & Structural ---
@@ -19,7 +20,9 @@ public enum DiagnosticCode
 
 	// --- Function & Method ---
 	ARGUMENT_COUNT_MISMATCH("Argument count mismatch. Expected %d, got %d."), ARGUMENT_TYPE_MISMATCH("Argument %d: expected '%s', got '%s'."), UNINITIALIZED_VARIABLE("Implicit variable '%s' must be initialized."),
-	MISSING_RETURN("Non-void method '%s' must return a value of type '%s'."),
+	UNKNOWN_NAMED_ARGUMENT("No parameter named '%s'."), DUPLICATE_ARGUMENT("Argument '%s' was provided more than once."), POSITIONAL_AFTER_NAMED_ARGUMENT("Positional arguments must come before named arguments."), MISSING_REQUIRED_ARGUMENT("Missing required argument '%s'."),
+	MISSING_RETURN("Non-void method '%s' must return a value of type '%s'."), IMMUTABLE_ASSIGNMENT("Cannot assign to const symbol '%s'."),
+	PRIVATE_MEMBER_ACCESS("Member '%s' is private in type '%s'."),
 
 	// --- Arrays & Indexing ---
 	INDEX_NOT_INTEGER("Array index must be an integer, got '%s'."), TYPE_NOT_INDEXABLE("Type '%s' is not indexable."), ARRAY_LITERAL_MISMATCH("Array literal element type mismatch. Expected '%s', got '%s'."),
@@ -36,7 +39,7 @@ public enum DiagnosticCode
 	NONE_ASSIGNED_TO_NON_OPTIONAL("'none' cannot be assigned to non-optional type '%s'."),
 
 	// --- Structs ---
-	STRUCT_MISSING_CONSTRUCTOR("Struct '%s' has no constructor. All fields must be explicitly initialized via a constructor."),
+	STRUCT_MISSING_CONSTRUCTOR("Struct '%s' has no constructor. All fields must be explicitly initialized via a constructor."), FIELD_INITIALIZER_NOT_ALLOWED_IN_TYPE("Field '%s' cannot have an initializer in a type declaration. Use a constructor instead."), TUPLE_CONSTRUCTION_INACCESSIBLE_FIELD("Cannot construct type '%s' from a tuple because field '%s' is private."),
 
 	// --- Tags ---
 	TAG_AS_VALUE_TYPE("Tag '%s' cannot be used as a value type. Tags are compile-time-only constraints; use '<T: %s>' in a generic."),

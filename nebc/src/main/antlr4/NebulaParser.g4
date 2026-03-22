@@ -367,7 +367,7 @@ overloadable_operator
 // =============================================================================
 
 type_declaration
-    : attribute* TYPE IDENTIFIER type_parameters? type_body
+    : attribute* visibility_modifier? TYPE IDENTIFIER type_parameters? type_body
     ;
 
 type_body
@@ -541,9 +541,6 @@ null_coalescing_expression
     : binary_or_expression (OP_COALESCING null_coalescing_expression)?
     ;
 
-new_expression
-    : NEW type arguments
-    ;
 
 assignment_operator
     : ASSIGNMENT
@@ -635,7 +632,6 @@ primary_expression_start
     | THIS
     | NONE
     | array_literal
-    | new_expression
     | IDENTIFIER
     | qualified_name
     ;

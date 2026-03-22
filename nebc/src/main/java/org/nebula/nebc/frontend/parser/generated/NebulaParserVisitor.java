@@ -619,12 +619,6 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitNull_coalescing_expression(NebulaParser.Null_coalescing_expressionContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#new_expression}.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	T visitNew_expression(NebulaParser.New_expressionContext ctx);
-	/**
 	 * Visit a parse tree produced by {@link NebulaParser#assignment_operator}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
