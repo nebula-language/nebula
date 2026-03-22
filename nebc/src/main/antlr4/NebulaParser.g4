@@ -519,6 +519,7 @@ nested_gt
 
 tuple_literal
     : OPEN_PARENS argument (COMMA argument)+ CLOSE_PARENS
+    | OPEN_PARENS argument COMMA CLOSE_PARENS
     ;
 
 parenthesized_expression

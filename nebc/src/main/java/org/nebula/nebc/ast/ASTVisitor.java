@@ -242,6 +242,16 @@ public interface ASTVisitor<R>
     R visitStringInterpolationExpression(StringInterpolationExpression node);
 
     /**
+     * @grammar name: value — a named argument at a call site or named tuple element.
+     * Default implementation delegates to the inner value so that visitors that
+     * do not care about the name still work correctly.
+     */
+    default R visitNamedArgumentExpression(NamedArgumentExpression node)
+    {
+        return node.value.accept(this);
+    }
+
+    /**
      * @grammar {expr:formatSpec} — an interpolation hole with a format specifier.
      */
     R visitFormattedInterpolationExpression(FormattedInterpolationExpression node);

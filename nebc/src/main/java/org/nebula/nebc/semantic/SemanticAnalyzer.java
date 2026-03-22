@@ -3838,6 +3838,93 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		if (expected == null)
 			expected = currentMethodReturnType;
 
+		// ── Named-element reordering for TupleType target ────────────────────────────
+		// If ANY element is a NamedArgumentExpression and the expected type is a named
+		// TupleType, reorder / validate before proceeding.
+		if (expected instanceof TupleType targetTt && !targetTt.fieldNames.isEmpty())
+		{
+			boolean anyNamed = node.elements.stream().anyMatch(e -> e instanceof NamedArgumentExpression);
+			if (anyNamed)
+			{
+				// Validate: all must be named (no mixing positional + named in tuple literals).
+				boolean allNamed = node.elements.stream().allMatch(e -> e instanceof NamedArgumentExpression);
+				if (!allNamed)
+				{
+					error(DiagnosticCode.POSITIONAL_AFTER_NAMED_ARGUMENT, node);
+					recordType(node, Type.ERROR);
+					return Type.ERROR;
+				}
+
+				// Build name→expr map and reorder to match target field order.
+				java.util.Map<String, Expression> namedMap = new java.util.LinkedHashMap<>();
+				for (Expression elem : node.elements)
+				{
+					NamedArgumentExpression nae = (NamedArgumentExpression) elem;
+					if (namedMap.containsKey(nae.name))
+					{
+						error(DiagnosticCode.DUPLICATE_ARGUMENT, nae, nae.name);
+					}
+					else
+					{
+						namedMap.put(nae.name, nae.value);
+					}
+				}
+
+				// Validate names against target field names.
+				for (String usedName : namedMap.keySet())
+				{
+					if (targetTt.indexOfField(usedName) < 0)
+					{
+						error(DiagnosticCode.UNKNOWN_NAMED_ARGUMENT, namedMap.get(usedName), usedName);
+					}
+				}
+
+				// Rewrite node.elements in positional order for the rest of the analysis and codegen.
+				node.elements.clear();
+				for (int i = 0; i < targetTt.fieldNames.size(); i++)
+				{
+					String fieldName = targetTt.fieldNames.get(i);
+					Expression val = namedMap.get(fieldName);
+					if (val != null)
+					{
+						node.elements.add(val);
+					}
+					else
+					{
+						error(DiagnosticCode.MISSING_REQUIRED_ARGUMENT, node, fieldName);
+						node.elements.add(new org.nebula.nebc.ast.expressions.NoneExpression(node.getSpan()));
+					}
+				}
+			}
+
+			// Now type-check the (possibly reordered) elements against the target TupleType.
+			if (node.elements.size() != targetTt.elementTypes.size())
+			{
+				error(DiagnosticCode.ARGUMENT_COUNT_MISMATCH, node,
+					targetTt.elementTypes.size(), node.elements.size());
+				recordType(node, Type.ERROR);
+				return Type.ERROR;
+			}
+
+			for (int i = 0; i < node.elements.size(); i++)
+			{
+				Type elemType = node.elements.get(i).accept(this);
+				Type fieldType = targetTt.elementTypes.get(i);
+				if (elemType != Type.ERROR && !elemType.isAssignableTo(fieldType))
+				{
+					boolean narrowing = elemType instanceof PrimitiveType pi && pi.isInteger()
+						&& fieldType instanceof PrimitiveType pf && pf.isInteger()
+						&& node.elements.get(i) instanceof LiteralExpression lit
+						&& lit.value instanceof Long lv && intLiteralFitsInType(lv, pf);
+					if (!narrowing)
+						error(DiagnosticCode.TYPE_MISMATCH, node.elements.get(i), fieldType.name(), elemType.name());
+				}
+			}
+
+			recordType(node, targetTt);
+			return targetTt;
+		}
+
 		if (expected instanceof CompositeType ct)
 		{
 			List<VariableSymbol> orderedFields = getOrderedCompositeFields(ct);
@@ -3879,14 +3966,39 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		}
 
 		List<Type> elementTypes = new ArrayList<>();
+		List<String> elementNames = new ArrayList<>();
+		boolean anyNamed = node.elements.stream().anyMatch(e -> e instanceof NamedArgumentExpression);
 		for (Expression expr : node.elements)
 		{
-			elementTypes.add(expr.accept(this));
+			if (expr instanceof NamedArgumentExpression nae)
+			{
+				elementNames.add(nae.name);
+				elementTypes.add(nae.value.accept(this));
+				// Replace the NamedArgumentExpression with its inner value so codegen sees
+				// plain expressions.
+				node.elements.set(node.elements.indexOf(expr), nae.value);
+			}
+			else
+			{
+				elementNames.add(null);
+				elementTypes.add(expr.accept(this));
+			}
 		}
-		TupleType result = new TupleType(elementTypes);
+		TupleType result = anyNamed
+			? new TupleType(elementTypes, elementNames)
+			: new TupleType(elementTypes);
 		recordType(node, result);
 		return result;
 	}
+
+	@Override
+	public Type visitNamedArgumentExpression(org.nebula.nebc.ast.expressions.NamedArgumentExpression node)
+	{
+		// When encountered outside a tuple literal context (e.g. inside a call before
+		// normalisation), just analyse the inner value.
+		return node.value.accept(this);
+	}
+
 
 	private List<VariableSymbol> getOrderedCompositeFields(CompositeType type)
 	{

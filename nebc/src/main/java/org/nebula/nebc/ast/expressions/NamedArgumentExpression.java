@@ -24,8 +24,6 @@ public final class NamedArgumentExpression extends Expression
 	@Override
 	public <R> R accept(ASTVisitor<R> visitor)
 	{
-		// This node is a call-site wrapper. For normal expression visitors,
-		// behave like the wrapped value expression.
-		return value.accept(visitor);
+		return visitor.visitNamedArgumentExpression(this);
 	}
 }

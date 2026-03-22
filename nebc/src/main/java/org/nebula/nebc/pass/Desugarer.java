@@ -406,7 +406,16 @@ public class Desugarer implements ASTVisitor<ASTNode>
 		List<Expression> args = new ArrayList<>();
 		for (Expression arg : node.arguments)
 		{
-			args.add((Expression) arg.accept(this));
+			if (arg instanceof NamedArgumentExpression nae)
+			{
+				// Preserve the named-argument wrapper; only desugar the inner value.
+				Expression desugaredValue = (Expression) nae.value.accept(this);
+				args.add(new NamedArgumentExpression(nae.getSpan(), nae.name, desugaredValue));
+			}
+			else
+			{
+				args.add((Expression) arg.accept(this));
+			}
 		}
 		return new InvocationExpression(node.getSpan(), target, args);
 	}
@@ -447,7 +456,16 @@ public class Desugarer implements ASTVisitor<ASTNode>
 		List<Expression> args = new ArrayList<>();
 		for (Expression arg : node.elements)
 		{
-			args.add((Expression) arg.accept(this));
+			if (arg instanceof NamedArgumentExpression nae)
+			{
+				// Preserve the named-element wrapper; only desugar the inner value.
+				Expression desugaredValue = (Expression) nae.value.accept(this);
+				args.add(new NamedArgumentExpression(nae.getSpan(), nae.name, desugaredValue));
+			}
+			else
+			{
+				args.add((Expression) arg.accept(this));
+			}
 		}
 		return new TupleLiteralExpression(node.getSpan(), args);
 	}

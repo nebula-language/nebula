@@ -4506,6 +4506,33 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			}
 		}
 
+		// TupleType → emit/call structural toStr function
+		if (partType instanceof TupleType tt)
+		{
+			SymbolTable implScope = analyzer.getPrimitiveImplScopes().get(tt);
+			String funcName;
+			if (implScope != null)
+			{
+				Symbol sym = implScope.resolveLocal("toStr");
+				funcName = (sym instanceof MethodSymbol ms) ? ms.getMangledName()
+					: buildTupleToStrFuncName(tt);
+			}
+			else
+			{
+				funcName = buildTupleToStrFuncName(tt);
+			}
+			LLVMValueRef toStrFn     = getOrEmitTupleToStrFunction(tt, funcName);
+			LLVMTypeRef  toStrFnType = LLVMGlobalGetValueType(toStrFn);
+			return LLVMBuildCall2(builder, toStrFnType, toStrFn,
+				new PointerPointer<>(new LLVMValueRef[]{ argVal }), 1, "tuple_str");
+		}
+
+		// OptionalType → "none" or inner value stringified
+		if (partType instanceof OptionalType ot)
+		{
+			return emitOptionalToStr(argVal, ot);
+		}
+
 		// bool → __nebula_rt_bool_to_str(i32)
 		if (partType == PrimitiveType.BOOL)
 		{
@@ -4771,6 +4798,71 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		LLVMTypeRef i64t = LLVMInt64TypeInContext(context);
 		return LLVMStructTypeInContext(context,
 			new PointerPointer<>(new LLVMTypeRef[]{ ptrT, i64t }), 2, 0);
+	}
+
+	/**
+	 * Builds the mangled name for the structural {@code Stringable.toStr} function
+	 * of a {@link TupleType}, mirroring what {@code SemanticAnalyzer.toStructuralSafeName}
+	 * + {@code MethodSymbol.getMangledName} produce.
+	 * Format: {@code tuple_<elem0>_<elem1>...__Stringable__toStr}.
+	 */
+	private String buildTupleToStrFuncName(TupleType tt)
+	{
+		StringBuilder sb = new StringBuilder("tuple");
+		for (Type elem : tt.elementTypes)
+			sb.append('_').append(elem.name().replaceAll("[^a-zA-Z0-9]", "_"));
+		sb.append("__Stringable__toStr");
+		return sb.toString();
+	}
+
+	/**
+	 * Emits inline LLVM IR that converts an optional value to a {@code NebulaStr}.
+	 * <ul>
+	 *   <li>If present: stringifies the inner value via {@link #emitValueToNebulaStr}.</li>
+	 *   <li>If absent: returns the literal string {@code "none"}.</li>
+	 * </ul>
+	 * The optional struct layout is {@code { i1 present, inner_type value }}.
+	 */
+	private LLVMValueRef emitOptionalToStr(LLVMValueRef optVal, OptionalType ot)
+	{
+		LLVMTypeRef strT         = LLVMTypeMapper.getOrCreateStructType(context, PrimitiveType.STR);
+		LLVMTypeRef optStructType = LLVMTypeMapper.getOrCreateOptionalStructType(context, ot);
+		LLVMTypeRef innerLLVMType = toLLVMType(ot.innerType);
+
+		// Spill the optional struct to an alloca so we can GEP into it
+		LLVMValueRef optAlloca = emitEntryAlloca(optStructType, "opt_tostr_tmp");
+		LLVMBuildStore(builder, optVal, optAlloca);
+
+		// Extract the presence flag (field 0)
+		LLVMValueRef presentGep = LLVMBuildStructGEP2(builder, optStructType, optAlloca, 0, "opt_present_ptr");
+		LLVMValueRef presentBit = LLVMBuildLoad2(builder, LLVMInt1TypeInContext(context), presentGep, "opt_present");
+
+		// Allocate a result slot
+		LLVMValueRef resultPtr = emitEntryAlloca(strT, "opt_str_result");
+
+		LLVMBasicBlockRef presentBB = LLVMAppendBasicBlockInContext(context, currentFunction, "opt_present_bb");
+		LLVMBasicBlockRef absentBB  = LLVMAppendBasicBlockInContext(context, currentFunction, "opt_absent_bb");
+		LLVMBasicBlockRef mergeBB   = LLVMAppendBasicBlockInContext(context, currentFunction, "opt_str_merge");
+
+		LLVMBuildCondBr(builder, presentBit, presentBB, absentBB);
+
+		// ── present branch: stringify inner value ────────────────────────────────────
+		LLVMPositionBuilderAtEnd(builder, presentBB);
+		LLVMValueRef valueGep  = LLVMBuildStructGEP2(builder, optStructType, optAlloca, 1, "opt_val_ptr");
+		LLVMValueRef innerVal  = LLVMBuildLoad2(builder, innerLLVMType, valueGep, "opt_inner");
+		LLVMValueRef innerStr  = emitValueToNebulaStr(innerVal, ot.innerType);
+		LLVMBuildStore(builder, innerStr, resultPtr);
+		LLVMBuildBr(builder, mergeBB);
+
+		// ── absent branch: "none" literal ────────────────────────────────────────────
+		LLVMPositionBuilderAtEnd(builder, absentBB);
+		LLVMBuildStore(builder, emitStringLiteralValue("none"), resultPtr);
+		LLVMBuildBr(builder, mergeBB);
+
+		// ── merge ─────────────────────────────────────────────────────────────────────
+		LLVMPositionBuilderAtEnd(builder, mergeBB);
+		currentBlockTerminated = false;
+		return LLVMBuildLoad2(builder, strT, resultPtr, "opt_str");
 	}
 
 	/**
