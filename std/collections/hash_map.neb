@@ -12,7 +12,7 @@ namespace std::collections;
 // HashMap is a class. Its backing array is heap memory managed by the runtime
 // allocator; entries are stored by value inside that array.
 
-class HashMap<K: Hashable, V>
+type HashMap<K: Hashable, V>
 {
     private Ref  buckets;     // raw bucket array
     private i64  bucketCount; // total allocated bucket slots

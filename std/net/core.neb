@@ -8,7 +8,7 @@ namespace std::net;
 // SockAddrIn — IPv4 socket address (mirrors Linux sockaddr_in)
 // -----------------------------------------------------------------------------
 
-struct SockAddrIn
+type SockAddrIn
 {
     i32 family;   // AF_INET
     i32 port;     // network byte order

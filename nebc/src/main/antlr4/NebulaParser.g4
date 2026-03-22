@@ -107,8 +107,7 @@ top_level_declaration
     | enum_declaration
     | const_declaration
     | method_declaration
-    | class_declaration
-    | struct_declaration
+    | type_declaration
     | trait_declaration
     | impl_declaration
     | union_declaration
@@ -301,7 +300,7 @@ backlink_modifier
     ;
 
 modifiers
-    : (visibility_modifier | STATIC | OVERRIDE)*
+    : (visibility_modifier | STATIC)*
     ;
 
 field_declaration
@@ -367,38 +366,16 @@ overloadable_operator
 // Type Definition Declarations
 // =============================================================================
 
-class_declaration
-    : attribute* CLASS IDENTIFIER type_parameters? inheritance_clause? class_body
+type_declaration
+    : attribute* TYPE IDENTIFIER type_parameters? type_body
     ;
 
-class_body
-    : OPEN_BRACE class_member* CLOSE_BRACE
+type_body
+    : OPEN_BRACE type_member* CLOSE_BRACE
     ;
 
-class_member
-    : operator_declaration
-    | method_declaration
-    | field_declaration
-    | constructor_declaration
-    ;
-
-struct_declaration
-    : attribute* STRUCT IDENTIFIER type_parameters? inheritance_clause? struct_body
-    ;
-
-struct_body
-    : OPEN_BRACE struct_member* CLOSE_BRACE
-    ;
-
-struct_member
-    : operator_declaration
-    | method_declaration
-    | field_declaration
-    | constructor_declaration
-    ;
-
-inheritance_clause
-    : COLON type (COMMA type)*
+type_member
+    : field_declaration
     ;
 
 trait_declaration
@@ -435,7 +412,7 @@ union_variant
     ;
 
 impl_declaration
-    : attribute* IMPL type FOR type (COMMA type)* (impl_block | SEMICOLON)
+    : attribute* IMPL type (FOR type (COMMA type)*)? (impl_block | SEMICOLON)
     ;
 
 impl_block
@@ -444,6 +421,7 @@ impl_block
 
 impl_member
     : method_declaration
+    | operator_declaration
     ;
 
 //=============================================================================

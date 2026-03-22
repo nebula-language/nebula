@@ -210,12 +210,7 @@ public class SymbolExporter
         Type type = ts.getType();
         obj.addProperty("name", ts.getName());
 
-        if (type instanceof ClassType ct)
-        {
-            obj.addProperty("kind", "class");
-            obj.add("members", exportTable(ct.getMemberScope()));
-        }
-        else if (type instanceof StructType st)
+        if (type instanceof StructType st)
         {
             obj.addProperty("kind", "struct");
             obj.add("members", exportTable(st.getMemberScope()));

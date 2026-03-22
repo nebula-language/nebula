@@ -272,7 +272,7 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	}
 
 	@Override
-	public ASTNode visitClass_declaration(NebulaParser.Class_declarationContext ctx)
+	public ASTNode visitType_declaration(NebulaParser.Type_declarationContext ctx)
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
 		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
@@ -280,49 +280,13 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 
 		List<GenericParam> typeParams = buildTypeParams(ctx.type_parameters());
 
-		List<TypeNode> inheritance = new ArrayList<>();
-		if (ctx.inheritance_clause() != null)
-		{
-			for (var typeCtx : ctx.inheritance_clause().type())
-			{
-				inheritance.add((TypeNode) visit(typeCtx));
-			}
-		}
-
 		List<Declaration> members = new ArrayList<>();
-		for (var memberCtx : ctx.class_body().class_member())
+		for (var memberCtx : ctx.type_body().type_member())
 		{
 			members.add((Declaration) visit(memberCtx.getChild(0)));
 		}
 
-		return new ClassDeclaration(span, name, typeParams, inheritance, members, attrs);
-	}
-
-	@Override
-	public ASTNode visitStruct_declaration(NebulaParser.Struct_declarationContext ctx)
-	{
-		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
-		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
-		String name = ctx.IDENTIFIER().getText();
-
-		List<GenericParam> typeParams = buildTypeParams(ctx.type_parameters());
-
-		List<TypeNode> inheritance = new ArrayList<>();
-		if (ctx.inheritance_clause() != null)
-		{
-			for (var typeCtx : ctx.inheritance_clause().type())
-			{
-				inheritance.add((TypeNode) visit(typeCtx));
-			}
-		}
-
-		List<Declaration> members = new ArrayList<>();
-		for (var memberCtx : ctx.struct_body().struct_member())
-		{
-			members.add((Declaration) visit(memberCtx.getChild(0)));
-		}
-
-		return new StructDeclaration(span, name, typeParams, inheritance, members, attrs);
+		return new StructDeclaration(span, name, typeParams, Collections.emptyList(), members, attrs);
 	}
 
 	@Override
@@ -375,24 +339,42 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
 		List<AttributeNode> attrs = buildAttributes(ctx.attribute());
 
-		// The first type() is the trait being implemented
+		List<MethodDeclaration> members = new ArrayList<>();
+		List<OperatorDeclaration> operators = new ArrayList<>();
+		if (ctx.impl_block() != null)
+		{
+			for (var member : ctx.impl_block().impl_member())
+			{
+				if (member.method_declaration() != null)
+				{
+					members.add((MethodDeclaration) visit(member.method_declaration()));
+				}
+				else if (member.operator_declaration() != null)
+				{
+					operators.add((OperatorDeclaration) visit(member.operator_declaration()));
+				}
+			}
+		}
+
+		// Grammar: IMPL type (FOR type (COMMA type)*)?
+		// - Non-trait impl: IMPL TargetType { ... }  → type(0) is the target, no FOR
+		// - Trait impl: IMPL TraitType FOR TargetType { ... } → type(0) is trait, type(1+) are targets
+		boolean hasTrait = ctx.FOR() != null;
+		if (!hasTrait)
+		{
+			// Non-trait method impl: impl Type { methods + operators }
+			TypeNode targetType = (TypeNode) visit(ctx.type(0));
+			return new ImplDeclaration(span, null, targetType, members, operators, attrs);
+		}
+
+		// Trait impl: impl Trait for Type1, Type2 { ... }
 		TypeNode traitType = (TypeNode) visit(ctx.type(0));
 
 		List<ASTNode> impls = new ArrayList<>();
 		for (int i = 1; i < ctx.type().size(); i++)
 		{
 			TypeNode targetType = (TypeNode) visit(ctx.type(i));
-
-			List<MethodDeclaration> members = new ArrayList<>();
-			if (ctx.impl_block() != null)
-			{
-				for (var member : ctx.impl_block().impl_member())
-				{
-					members.add((MethodDeclaration) visit(member.method_declaration()));
-				}
-			}
-
-			impls.add(new ImplDeclaration(span, traitType, targetType, members, attrs));
+			impls.add(new ImplDeclaration(span, traitType, targetType, members, operators, attrs));
 		}
 
 		if (impls.size() == 1)

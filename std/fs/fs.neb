@@ -122,7 +122,7 @@ private extern "C"
 // allocation.  Under CVT, the File itself has no Region to track;
 // the strings read from it are tracked normally.
 
-struct File
+type File
 {
     i64 fd;
 

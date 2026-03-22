@@ -99,7 +99,7 @@ trait Callable
 // FnRef — the standard Nebula function reference
 // =============================================================================
 
-struct FnRef
+type FnRef
 {
     Ref raw;
 

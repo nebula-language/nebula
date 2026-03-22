@@ -11,7 +11,7 @@ namespace std::net;
 // EpollEvent — mirrors the runtime's NebulaEpollEvent struct
 // =============================================================================
 
-struct EpollEvent
+type EpollEvent
 {
     u32 events;    // event bitmask (EPOLLIN, EPOLLOUT, …)
     u32 _pad;      // alignment padding
@@ -29,7 +29,7 @@ struct EpollEvent
 // PollFd — used with the simpler poll() interface
 // =============================================================================
 
-struct PollFd
+type PollFd
 {
     i32 fd;
     i32 events;
@@ -47,7 +47,7 @@ struct PollFd
 // Epoll — epoll instance handle
 // =============================================================================
 
-struct Epoll
+type Epoll
 {
     i64 fd; // epoll file descriptor
 

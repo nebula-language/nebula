@@ -7,7 +7,7 @@ namespace std::collections;
 // A set backed by a HashMap<T, bool>.  Membership tests, additions, and
 // removals are all O(1) average.
 
-class HashSet<T: Hashable>
+type HashSet<T: Hashable>
 {
     private HashMap<T, bool> map;
 

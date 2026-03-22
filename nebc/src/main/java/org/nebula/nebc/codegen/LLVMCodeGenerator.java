@@ -386,12 +386,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		module = LLVMModuleCreateWithNameInContext("nebula_module", context);
 		builder = LLVMCreateBuilderInContext(context);
 
-		// 2a. Pre-pass: emit compiler-generated deep drop functions for all classes.
-		//     This must happen BEFORE user function bodies so that RegionTracker
-		//     can always find "TypeName__drop" in the module during cleanup emission.
-		emitDropFunctionsPrePass(units);
-
-		// 2b. Visit every compilation unit (methods, constructors, etc.)
+		// 2. Visit every compilation unit (methods, constructors, etc.)
 		for (CompilationUnit cu : units)
 		{
 			cu.accept(this);
@@ -707,11 +702,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 					namedValues.put("__" + param.name() + "_len", lenAlloca);
 				}
 
-				// CVT: If this parameter has 'drops', we own the region and must free it.
-				if (param.cvtModifier() == CVTModifier.DROPS && paramType instanceof ClassType ct)
-				{
-					regionTracker.registerRegion(param.name(), alloca, ct.name());
-				}
+
 			}
 		}
 
@@ -803,6 +794,33 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				method.accept(this);
 			}
 		}
+
+		// Emit operator declarations from impl block
+		for (org.nebula.nebc.ast.declarations.OperatorDeclaration op : node.operators)
+		{
+			List<org.nebula.nebc.semantic.symbol.MethodSymbol> allSymbols =
+					analyzer.getAllMethodSymbols(op);
+			if (allSymbols != null && allSymbols.size() > 1)
+			{
+				for (org.nebula.nebc.semantic.symbol.MethodSymbol sym : allSymbols)
+				{
+					org.nebula.nebc.semantic.symbol.Symbol prev =
+							analyzer.overrideNodeSymbol(op, sym);
+					try
+					{
+						op.accept(this);
+					}
+					finally
+					{
+						analyzer.restoreNodeSymbol(op, prev);
+					}
+				}
+			}
+			else
+			{
+				op.accept(this);
+			}
+		}
 		return null;
 	}
 
@@ -839,185 +857,6 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	// =================================================================
 	// CVT: DEEP-DROP PRE-PASS
 	// =================================================================
-
-	/**
-	 * Two-phase pre-pass that generates compiler-owned deep drop functions for
-	 * every non-generic class declaration in {@code units}.
-	 * <p>
-	 * <b>Phase 1</b> — forward-declare {@code void TypeName__drop(ptr)} for all
-	 * classes, so cross-references between drop functions always resolve.
-	 * <b>Phase 2</b> — fill in each function body (GEP + recursive field drops +
-	 * self {@code neb_free}).
-	 */
-	private void emitDropFunctionsPrePass(List<CompilationUnit> units)
-	{
-		// Collect all non-generic class declarations
-		List<ClassDeclaration> classes = new ArrayList<>();
-		for (CompilationUnit cu : units)
-		{
-			collectClassDeclarations(cu, classes);
-		}
-
-		// Phase 1: forward-declare void ClassName__drop(ptr)
-		LLVMTypeRef ptrT  = LLVMPointerTypeInContext(context, 0);
-		LLVMTypeRef voidT = LLVMVoidTypeInContext(context);
-		LLVMTypeRef dropFnType = LLVMFunctionType(voidT,
-			new PointerPointer<>(new LLVMTypeRef[]{ ptrT }), 1, 0);
-
-		for (ClassDeclaration cd : classes)
-		{
-			String dropName = cd.name + "__drop";
-			LLVMValueRef existing = LLVMGetNamedFunction(module, dropName);
-			if (existing == null || existing.isNull())
-			{
-				LLVMAddFunction(module, dropName, dropFnType);
-			}
-		}
-
-		// Phase 2: fill in function bodies
-		for (ClassDeclaration cd : classes)
-		{
-			emitDropFunction(cd);
-		}
-	}
-
-	/** Recursively collect all non-generic {@link ClassDeclaration} nodes. */
-	private void collectClassDeclarations(ASTNode node, List<ClassDeclaration> out)
-	{
-		if (node instanceof ClassDeclaration cd)
-		{
-			if (cd.typeParams == null || cd.typeParams.isEmpty())
-			{
-				out.add(cd);
-			}
-		}
-		else if (node instanceof CompilationUnit cu)
-		{
-			for (ASTNode decl : cu.declarations)
-			{
-				collectClassDeclarations(decl, out);
-			}
-		}
-		else if (node instanceof NamespaceDeclaration nd)
-		{
-			for (ASTNode member : nd.members)
-			{
-				collectClassDeclarations(member, out);
-			}
-		}
-	}
-
-	/**
-	 * Generate the body of {@code void ClassName__drop(ptr %this)}.
-	 * <p>
-	 * The generated function:
-	 * <ol>
-	 *   <li>For each non-{@code backlink} field of {@link ClassType}: loads the
-	 *       field pointer and calls {@code FieldType__drop}.</li>
-	 *   <li>For each non-{@code backlink} field of {@code OptionalType<ClassType>}:
-	 *       conditionally loads and drops the inner pointer if present.</li>
-	 *   <li>For each {@code str} field: extracts the data pointer and calls
-	 *       {@code neb_free}.</li>
-	 *   <li>Calls {@code neb_free(ptr %this)} to release the object itself.</li>
-	 * </ol>
-	 */
-	private void emitDropFunction(ClassDeclaration node)
-	{
-		// Look up the resolved ClassType — recorded by SemanticAnalyzer.visitClassDeclaration.
-		TypeSymbol typeSym = analyzer.getSymbol(node, TypeSymbol.class);
-		if (typeSym == null || !(typeSym.getType() instanceof ClassType ct))
-		{
-			return;
-		}
-
-		String dropName = node.name + "__drop";
-		LLVMValueRef dropFn = LLVMGetNamedFunction(module, dropName);
-		if (dropFn == null || dropFn.isNull())
-		{
-			return; // should have been forward-declared in phase 1
-		}
-
-		// Save insertion point (we might be generating inside another context)
-		LLVMBasicBlockRef prevBlock = LLVMGetInsertBlock(builder);
-
-		LLVMBasicBlockRef entryBB = LLVMAppendBasicBlockInContext(context, dropFn, "entry");
-		LLVMPositionBuilderAtEnd(builder, entryBB);
-
-		LLVMValueRef thisPtr = LLVMGetParam(dropFn, 0);
-		LLVMTypeRef structLlvmType = LLVMTypeMapper.getOrCreateStructType(context, ct);
-
-		// Walk fields in declaration order (same order as LLVM struct body).
-		// Use VariableSymbol.isBacklink() — the authoritative, symbol-table-side flag.
-		int fieldIdx = 0;
-		for (Symbol s : ct.getMemberScope().getSymbols().values())
-		{
-			if (!(s instanceof VariableSymbol vs) || vs.getName().equals("this"))
-			{
-				continue;
-			}
-
-			if (vs.isBacklink())
-			{
-				// Non-owning back-reference — must not be freed by this destructor.
-				fieldIdx++;
-				continue;
-			}
-
-			Type fieldType = vs.getType();
-			String fieldName = vs.getName();
-
-			// GEP to the field inside *this
-			LLVMValueRef fieldPtr = LLVMBuildStructGEP2(builder, structLlvmType,
-				thisPtr, fieldIdx, fieldName + "_gep");
-
-			if (fieldType instanceof ClassType fieldCt)
-			{
-				// Non-optional owned class field — always present, drop unconditionally
-				LLVMValueRef fieldVal = LLVMBuildLoad2(builder,
-					LLVMPointerTypeInContext(context, 0),
-					fieldPtr, fieldName + "_load");
-				emitDropCall(fieldVal, fieldCt.name());
-			}
-			else if (fieldType instanceof OptionalType ot
-				&& ot.innerType instanceof ClassType fieldCt)
-			{
-				// Optional owned class field — check presence flag first
-				LLVMTypeRef optLlvmType = LLVMTypeMapper.getOrCreateOptionalStructType(
-					context, ot);
-				LLVMValueRef optVal = LLVMBuildLoad2(builder, optLlvmType,
-					fieldPtr, fieldName + "_opt");
-				LLVMValueRef hasValue = LLVMBuildExtractValue(builder, optVal, 0,
-					fieldName + "_has");
-				LLVMValueRef innerPtr = LLVMBuildExtractValue(builder, optVal, 1,
-					fieldName + "_inner");
-
-				LLVMBasicBlockRef dropBB = LLVMAppendBasicBlockInContext(context,
-					dropFn, "drop_" + fieldName);
-				LLVMBasicBlockRef skipBB = LLVMAppendBasicBlockInContext(context,
-					dropFn, "skip_" + fieldName);
-				LLVMBuildCondBr(builder, hasValue, dropBB, skipBB);
-
-				LLVMPositionBuilderAtEnd(builder, dropBB);
-				emitDropCall(innerPtr, fieldCt.name());
-				LLVMBuildBr(builder, skipBB);
-
-				LLVMPositionBuilderAtEnd(builder, skipBB);
-			}
-			// Primitives, structs, and str fields require no additional action here
-
-			fieldIdx++;
-		}
-
-		// Free the object itself
-		emitNebFreeCall(thisPtr);
-		LLVMBuildRetVoid(builder);
-
-		// Restore previous insertion point
-		if (prevBlock != null && !prevBlock.isNull())
-		{
-			LLVMPositionBuilderAtEnd(builder, prevBlock);
-		}
-	}
 
 	/**
 	/**
@@ -1077,37 +916,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		return sym instanceof VariableSymbol vs && vs.isBacklink();
 	}
 
-	@Override
-	public LLVMValueRef visitClassDeclaration(ClassDeclaration node)
-	{
-		// Emit all class members, including generic classes.
-		// Unsubstituted type parameters lower to opaque ptr via LLVMTypeMapper,
-		// giving a stable erased ABI for library symbols.
-		//
-		// If a method body references a trait-bound type parameter (e.g. K.hashCode()
-		// in HashMap.bucketIndex) we cannot emit a body without vtable dispatch. In that
-		// case we catch the CodegenException, strip any partially-built blocks from the
-		// function so it remains a valid forward declaration, and continue. The symbol
-		// will be exported by the .nebsym metadata and the forward-declared LLVM function
-		// keeps the correct type for call-site linking; the body will be provided by
-		// a future erased-bitcode mechanism.
-		boolean isGeneric = node.typeParams != null && !node.typeParams.isEmpty();
-		for (ASTNode member : node.members)
-		{
-			if (member instanceof MethodDeclaration || member instanceof ConstructorDeclaration)
-			{
-				if (!isGeneric)
-				{
-					member.accept(this);
-				}
-				else
-				{
-					emitGenericClassMemberSafe(member);
-				}
-			}
-		}
-		return null;
-	}
+
 
 	/**
 	 * Emits a single member of a generic class/struct, catching any
@@ -1298,13 +1107,6 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 						LLVMBuildStore(builder, castedVal, alloca);
 					}
 
-					// CVT/LUA: Track heap allocations for deterministic deallocation.
-					// A variable initialised from a 'new' expression owns the region.
-					if (type instanceof ClassType ct && decl.initializer() instanceof NewExpression
-						&& regionTracker != null)
-					{
-						regionTracker.registerRegion(varName, alloca, ct.name());
-					}
 					// CVT/LUA: Track dynamic strings as Aggregate Proxies (§7.1).
 					// String interpolation heap-allocates a buffer via neb_alloc,
 					// so we track the %str struct and extract field 0 (ptr) to free.
@@ -1760,23 +1562,13 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			LLVMValueRef alloca = LLVMBuildAlloca(builder, toLLVMType(paramType), param.name());
 			LLVMBuildStore(builder, paramValue, alloca);
 			namedValues.put(param.name(), alloca);
-
-			// CVT: If this parameter has 'drops', we own the region and must free it.
-			if (param.cvtModifier() == CVTModifier.DROPS && paramType instanceof ClassType ct)
-			{
-				regionTracker.registerRegion(param.name(), alloca, ct.name());
-			}
 		}
 
 		if (node.body != null)
 		{
 			// Before body, initialize fields that have default values
 			Symbol owner = symbol.getDefinedIn().getOwner();
-			if (owner instanceof TypeSymbol ts && ts.getDeclarationNode() instanceof ClassDeclaration cd)
-			{
-				initializeFields(thisValue, (ClassType) ts.getType(), cd.members);
-			}
-			else if (owner instanceof TypeSymbol ts && ts.getDeclarationNode() instanceof StructDeclaration sd)
+			if (owner instanceof TypeSymbol ts && ts.getDeclarationNode() instanceof StructDeclaration sd)
 			{
 				initializeFields(thisValue, (StructType) ts.getType(), sd.members);
 			}
@@ -2852,23 +2644,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			LLVMValueRef storeVal = emitCompoundRhs(pointer, targetSemType, node.operator, rhs);
 			LLVMBuildStore(builder, storeVal, pointer);
 
-			// CVT/LUA: Storing a class reference into a field captures it — the parent
-			// object now owns the region. Mark the source variable as transferred,
-			// unless the target field is a backlink (weak reference — not truly captured).
-			if (regionTracker != null && node.operator.equals("=")
-				&& (targetSemType instanceof ClassType
-					|| (targetSemType instanceof OptionalType ot2 && ot2.innerType instanceof ClassType))
-				&& node.value instanceof IdentifierExpression srcIdent
-				&& regionTracker.isTracked(srcIdent.name))
-			{
-				Type baseType2 = analyzer.getType(mae.target);
-				boolean isBacklink = baseType2 instanceof CompositeType compT2
-					&& isBacklinkField(compT2, mae.memberName);
-				if (!isBacklink)
-				{
-					regionTracker.markTransferred(srcIdent.name);
-				}
-			}
+
 
 			return storeVal;
 		}
@@ -3169,6 +2945,14 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		{
 			return emitImplicitDefaultStructCtor(node, st);
 		}
+		// Direct positional field initialization: T(val1, val2, ...)
+		// When the SA recorded the target as a StructType (no constructor function),
+		// skip identifier resolution (type names are not values) and emit directly.
+		if (targetTypeEarly instanceof StructType st2 && !node.arguments.isEmpty()
+				&& node.target instanceof IdentifierExpression)
+		{
+			return emitDirectFieldInit(node, st2);
+		}
 
 		LLVMValueRef function = null;
 
@@ -3227,9 +3011,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			else if (sym instanceof TypeSymbol ts && ts.getType() instanceof CompositeType genericCt
 					&& node.target instanceof IdentifierExpression ctorIdent)
 			{
-				// Generic struct/class constructor call: Pair(3, 7) where SA inferred T=i32.
-				// Collect type parameters (TypeSymbol entries with TypeParameterType) from the
-				// struct's member scope and build a Substitution from inferred type args.
+				// Generic struct instantiation: Pair(3, 7) where SA inferred T=i32.
 				List<TypeParameterType> typeParams = genericCt.getMemberScope().getSymbols().values()
 					.stream()
 					.filter(s -> s instanceof org.nebula.nebc.semantic.symbol.TypeSymbol tts
@@ -3239,7 +3021,6 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 				if (!typeParams.isEmpty() && typeParams.size() == node.getTypeArguments().size())
 				{
-					// The SA recorded the monomorphized return type on the invocation node itself.
 					Type monoType = analyzer.getType(node);
 					if (!(monoType instanceof CompositeType monoCt))
 					{
@@ -3254,7 +3035,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 						currentSubstitution.bind(typeParams.get(i), node.getTypeArguments().get(i));
 					}
 
-					// Find the constructor MethodSymbol and emit/look up its specialization.
+					// Check for an explicit constructor MethodSymbol (legacy / imported).
 					Symbol ctorSym = genericCt.getMemberScope().resolveLocal(ctorIdent.name);
 					if (ctorSym instanceof MethodSymbol ctorMs)
 					{
@@ -3267,50 +3048,21 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 						{
 							// Also emit all other methods/operators of this generic struct under
 							// the current substitution so that calls to them later resolve.
-							if (ts.getDeclarationNode() instanceof StructDeclaration genericSd)
-							{
-								for (ASTNode member : genericSd.members)
-								{
-									if (member instanceof MethodDeclaration md)
-									{
-										Symbol memberSym = genericCt.getMemberScope().resolveLocal(md.name);
-										if (memberSym instanceof MethodSymbol memberMs)
-										{
-											String specName = getSpecializationName(memberMs);
-											LLVMValueRef existing = LLVMGetNamedFunction(module, specName);
-											if (existing == null || existing.isNull()
-													|| LLVMCountBasicBlocks(existing) == 0)
-											{
-												visitMethodDeclaration(md);
-											}
-										}
-									}
-									else if (member instanceof OperatorDeclaration od)
-									{
-										Symbol memberSym = genericCt.getMemberScope()
-												.resolveLocal(operatorDeclKey(od));
-										if (memberSym instanceof MethodSymbol memberMs)
-										{
-											String specName = getSpecializationName(memberMs);
-											LLVMValueRef existing = LLVMGetNamedFunction(module, specName);
-											if (existing == null || existing.isNull()
-													|| LLVMCountBasicBlocks(existing) == 0)
-											{
-												visitOperatorDeclaration(od);
-											}
-										}
-									}
-								}
-							}
+							emitGenericMemberSpecializations(ts, genericCt);
 
-							// Emit the full constructor call using the monomorphized composite type.
 							LLVMValueRef result = emitConstructorCall(node, monoCt, ctorFunction);
 							currentSubstitution = prevSub;
 							return result;
 						}
 					}
 
+					// No constructor — direct field initialization for generic type.
+					// Emit member specializations, then positional init.
+					emitGenericMemberSpecializations(ts, genericCt);
+
+					LLVMValueRef result = emitDirectFieldInit(node, (StructType)(monoCt instanceof StructType ? monoCt : genericCt));
 					currentSubstitution = prevSub;
+					return result;
 				}
 			}
 		}
@@ -3332,14 +3084,11 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		}
 		if (!(targetType instanceof FunctionType ft))
 		{
-			// Struct/class constructor call: Vec2(x, y) where target resolved to StructType/ClassType
+			// Struct/type direct initialization: Vec2(x, y) — no constructor function,
+			// just positional field init.
 			if (targetType instanceof StructType st)
 			{
-				return emitConstructorCall(node, st, function);
-			}
-			if (targetType instanceof ClassType clst)
-			{
-				return emitConstructorCall(node, clst, function);
+				return emitDirectFieldInit(node, st);
 			}
 			throw new CodegenException("Target of invocation is not a function: " + targetType.name() + " (at " + node.target + ")");
 		}
@@ -3426,35 +3175,26 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		// If this is a member call, prepend the receiver as 'this'
 		if (node.target instanceof MemberAccessExpression mae && nebulaParamCount > nebulaArgCount)
 		{
-			LLVMValueRef receiver = mae.target.accept(this);
-			Type receiverSemType = analyzer.getType(mae.target);
-			Type thisParamType = ft.parameterTypes.get(0);
-
-			// System.out.println("[DEBUG]   Receiver: " + receiverSemType.name() + " -> " + thisParamType.name());
-			argsArr[llvmArgIdx++] = emitCast(receiver, receiverSemType, thisParamType);
-			nebulaParamIdx++;
-		}
-		// Bare inherited member call: greet() inside Child.run() where greet() is defined in
-		// Base.  The SA injects a synthetic 'this' identifier as the first effective argument.
-		// Here in codegen we detect the same pattern: IdentifierExpression target whose resolved
-		// FunctionType has a ClassType (not REF) as its first parameter, meaning the callee
-		// expects an explicit receiver that we must supply from the current 'this' alloca.
-		else if (node.target instanceof IdentifierExpression
-				&& nebulaParamCount > nebulaArgCount
-				&& !ft.parameterTypes.isEmpty()
-				&& ft.parameterTypes.get(0) instanceof ClassType inheritedThisType)
-		{
-			LLVMValueRef thisAlloca = namedValues.get("this");
-			if (thisAlloca == null)
+			// Static-style factory call: Color.red() where the base is a type name, not an instance.
+			// Pass undef for 'this' — the factory method doesn't use it.
+			Symbol receiverSym = analyzer.getSymbol(mae.target, Symbol.class);
+			if (receiverSym instanceof TypeSymbol)
 			{
-				throw new CodegenException("Bare inherited call to '" + node.target + "' outside method context");
+				Type thisParamType = ft.parameterTypes.get(0);
+				argsArr[llvmArgIdx++] = LLVMGetUndef(toLLVMType(thisParamType));
+				nebulaParamIdx++;
 			}
-			// Load the class pointer from its alloca (same as visitThisExpression)
-			LLVMTypeRef thisLlvmType = toLLVMType(inheritedThisType);
-			LLVMValueRef thisVal = LLVMBuildLoad2(builder, thisLlvmType, thisAlloca, "this_load");
-			argsArr[llvmArgIdx++] = thisVal;
-			nebulaParamIdx++;
+			else
+			{
+				LLVMValueRef receiver = mae.target.accept(this);
+				Type receiverSemType = analyzer.getType(mae.target);
+				Type thisParamType = ft.parameterTypes.get(0);
+				// System.out.println("[DEBUG]   Receiver: " + receiverSemType.name() + " -> " + thisParamType.name());
+				argsArr[llvmArgIdx++] = emitCast(receiver, receiverSemType, thisParamType);
+				nebulaParamIdx++;
+			}
 		}
+
 
 		for (int i = 0; i < nebulaArgCount; i++)
 		{
@@ -3593,28 +3333,8 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		LLVMTypeRef structLlvmType = LLVMTypeMapper.getOrCreateStructType(context, ct);
 
-		// Classes are heap-allocated reference types.  Delegate to the same neb_alloc
-		// path used by `visitNewExpression` so that `Child(42)` and `new Child(42)` are
-		// equivalent (both return a heap-allocated `ptr`).
-		final LLVMValueRef thisPtr;
-		if (ct instanceof ClassType)
-		{
-			LLVMValueRef nebAlloc = LLVMGetNamedFunction(module, "neb_alloc");
-			if (nebAlloc == null)
-			{
-				FunctionType allocFt = new FunctionType(PrimitiveType.REF, List.of(PrimitiveType.U64), null);
-				nebAlloc = LLVMAddFunction(module, "neb_alloc", toLLVMType(allocFt));
-			}
-			LLVMValueRef sizeVal = LLVMSizeOf(structLlvmType);
-			LLVMValueRef[] allocArgs = {sizeVal};
-			FunctionType allocFt = new FunctionType(PrimitiveType.REF, List.of(PrimitiveType.U64), null);
-			thisPtr = LLVMBuildCall2(builder, toLLVMType(allocFt), nebAlloc,
-					new PointerPointer<>(allocArgs), 1, ct.name() + "_alloc");
-		}
-		else
-		{
-			thisPtr = LLVMBuildAlloca(builder, structLlvmType, ct.name() + "_ctor");
-		}
+		// All types (formerly structs and classes) are value types — stack-allocate.
+		final LLVMValueRef thisPtr = LLVMBuildAlloca(builder, structLlvmType, ct.name() + "_ctor");
 
 		LLVMTypeRef ctorLlvmType = toLLVMType(ctorFnType);
 		int llvmArgCount = ctorFnType.parameterTypes.size();
@@ -3655,18 +3375,51 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			}
 		}
 
-		// Classes return a heap pointer; structs return a loaded value copy.
-		if (ct instanceof ClassType)
-		{
-			// CVT/LUA: Track this heap allocation for deterministic deallocation.
-			if (regionTracker != null && node.target instanceof IdentifierExpression)
-			{
-				// The caller will store into a named variable; tracking is deferred there.
-			}
-			return thisPtr;
-		}
-		// Load and return the constructed struct value
+		// All types are value types — load and return the constructed value copy.
 		return LLVMBuildLoad2(builder, structLlvmType, thisPtr, ct.name() + "_val");
+	}
+
+	/**
+	 * Emits a direct, positional field-by-field initialization for a struct type:
+	 * {@code T(val1, val2, ...)} allocates the struct on the stack and stores each
+	 * argument into the corresponding field slot in declaration order.
+	 */
+	private LLVMValueRef emitDirectFieldInit(InvocationExpression node, StructType st)
+	{
+		CompositeType ct = st;
+		if (currentSubstitution != null)
+		{
+			Type subst = currentSubstitution.substitute(st);
+			if (subst instanceof CompositeType substCt)
+				ct = substCt;
+		}
+		LLVMTypeRef structLlvmType = LLVMTypeMapper.getOrCreateStructType(context, ct);
+		LLVMValueRef alloca = LLVMBuildAlloca(builder, structLlvmType, ct.name() + "_init");
+
+		// Collect ordered fields from the member scope.
+		java.util.List<org.nebula.nebc.semantic.symbol.VariableSymbol> orderedFields = new java.util.ArrayList<>();
+		for (org.nebula.nebc.semantic.symbol.Symbol s : ct.getMemberScope().getSymbols().values())
+		{
+			if (s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs && !vs.getName().equals("this"))
+				orderedFields.add(vs);
+		}
+
+		for (int i = 0; i < node.arguments.size() && i < orderedFields.size(); i++)
+		{
+			Expression argNode = node.arguments.get(i);
+			LLVMValueRef argVal = argNode.accept(this);
+			Type fieldType = orderedFields.get(i).getType();
+			if (currentSubstitution != null)
+				fieldType = currentSubstitution.substitute(fieldType);
+			Type argSemType = analyzer.getType(argNode);
+			LLVMValueRef castedVal = emitCast(argVal, argSemType, fieldType);
+
+			LLVMValueRef fieldPtr = LLVMBuildStructGEP2(builder, structLlvmType, alloca, i,
+					orderedFields.get(i).getName() + "_init");
+			LLVMBuildStore(builder, castedVal, fieldPtr);
+		}
+
+		return LLVMBuildLoad2(builder, structLlvmType, alloca, ct.name() + "_val");
 	}
 
 	private String getSpecializationName(MethodSymbol ms)
@@ -3708,6 +3461,50 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		return sb.toString();
 	}
 
+	/**
+	 * Eagerly emits monomorphized specializations of all methods and operators
+	 * declared in a generic struct so that later calls resolve correctly.
+	 */
+	private void emitGenericMemberSpecializations(
+			org.nebula.nebc.semantic.symbol.TypeSymbol ts, CompositeType genericCt)
+	{
+		if (ts.getDeclarationNode() instanceof StructDeclaration genericSd)
+		{
+			for (ASTNode member : genericSd.members)
+			{
+				if (member instanceof MethodDeclaration md)
+				{
+					Symbol memberSym = genericCt.getMemberScope().resolveLocal(md.name);
+					if (memberSym instanceof MethodSymbol memberMs)
+					{
+						String specName = getSpecializationName(memberMs);
+						LLVMValueRef existing = LLVMGetNamedFunction(module, specName);
+						if (existing == null || existing.isNull()
+								|| LLVMCountBasicBlocks(existing) == 0)
+						{
+							visitMethodDeclaration(md);
+						}
+					}
+				}
+				else if (member instanceof OperatorDeclaration od)
+				{
+					Symbol memberSym = genericCt.getMemberScope()
+							.resolveLocal(operatorDeclKey(od));
+					if (memberSym instanceof MethodSymbol memberMs)
+					{
+						String specName = getSpecializationName(memberMs);
+						LLVMValueRef existing = LLVMGetNamedFunction(module, specName);
+						if (existing == null || existing.isNull()
+								|| LLVMCountBasicBlocks(existing) == 0)
+						{
+							visitOperatorDeclaration(od);
+						}
+					}
+				}
+			}
+		}
+	}
+
 
 	@Override
 	public LLVMValueRef visitMemberAccessExpression(MemberAccessExpression node)
@@ -3719,6 +3516,16 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		boolean baseIsTypeOnly = baseType instanceof NamespaceType
 				|| baseType instanceof EnumType
 				|| baseType instanceof UnionType;
+		// Static-style call: TypeName.method() where the base is a type name, not an instance
+		// (e.g. Color.red()). Don't try to evaluate the type identifier as a value.
+		if (!baseIsTypeOnly && baseType instanceof CompositeType)
+		{
+			Symbol targetSym = analyzer.getSymbol(node.target, Symbol.class);
+			if (targetSym instanceof TypeSymbol)
+			{
+				baseIsTypeOnly = true;
+			}
+		}
 		if (!baseIsTypeOnly)
 		{
 			base = node.target.accept(this);
@@ -3908,13 +3715,53 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			LLVMValueRef func = LLVMGetNamedFunction(module, mangledName);
 			if (func == null || func.isNull())
 			{
-				// Forward declaration
-				FunctionType ft = ms.getType();
-				if (currentSubstitution != null)
+				// If this is a method on a monomorphized generic type (e.g. Pair<i32,str>),
+				// emit the specialization on-demand now so the call site can link against it.
+				if (baseType instanceof CompositeType monoCt && monoCt.name().contains("<")
+						&& ms.getDeclarationNode() instanceof MethodDeclaration methodDecl)
 				{
-					ft = (FunctionType) currentSubstitution.substitute(ft);
+					String baseTypeName = monoCt.name().substring(0, monoCt.name().indexOf('<'));
+					Symbol origSymbol = analyzer.getGlobalScope().resolveType(baseTypeName);
+					if (origSymbol instanceof org.nebula.nebc.semantic.symbol.TypeSymbol origTs
+							&& origTs.getType() instanceof CompositeType origCt)
+					{
+						// Build substitution by comparing original TypeParameterType fields with
+						// their concrete counterparts in the monomorphized type's member scope.
+						Substitution prevSub = currentSubstitution;
+						Substitution sub = new Substitution();
+						for (org.nebula.nebc.semantic.symbol.Symbol s : origCt.getMemberScope().getSymbols().values())
+						{
+							if (s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs
+									&& vs.getType() instanceof TypeParameterType tpt)
+							{
+								org.nebula.nebc.semantic.symbol.Symbol monoS =
+										monoCt.getMemberScope().resolveLocal(vs.getName());
+								if (monoS instanceof org.nebula.nebc.semantic.symbol.VariableSymbol monoVs
+										&& !(monoVs.getType() instanceof TypeParameterType))
+								{
+									sub.bind(tpt, monoVs.getType());
+								}
+							}
+						}
+						if (!sub.getMapping().isEmpty())
+						{
+							currentSubstitution = sub;
+							func = visitMethodDeclaration(methodDecl);
+							currentSubstitution = prevSub;
+						}
+					}
 				}
-				func = LLVMAddFunction(module, mangledName, toLLVMType(ft));
+
+				if (func == null || func.isNull())
+				{
+					// Forward declaration fallback
+					FunctionType ft = ms.getType();
+					if (currentSubstitution != null)
+					{
+						ft = (FunctionType) currentSubstitution.substitute(ft);
+					}
+					func = LLVMAddFunction(module, mangledName, toLLVMType(ft));
+				}
 			}
 			return func;
 		}
@@ -3968,9 +3815,9 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	public LLVMValueRef visitNewExpression(NewExpression node)
 	{
 		Type type = analyzer.getType(node);
-		if (!(type instanceof ClassType ct))
+		if (!(type instanceof CompositeType ct))
 		{
-			throw new CodegenException("Cannot instantiate non-class type: " + type.name());
+			throw new CodegenException("Cannot instantiate non-composite type: " + type.name());
 		}
 
 		// 1. Allocate memory using neb_alloc
@@ -4173,13 +4020,8 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			return null;
 		}
 
-		// Build the same ordered field list used by LLVMTypeMapper to assign indices:
-		// inherited fields first (depth-first, ancestors before child), then own fields.
+		// Build the ordered field list used by LLVMTypeMapper to assign indices.
 		java.util.List<VariableSymbol> orderedFields = new java.util.ArrayList<>();
-		if (ct instanceof ClassType classType)
-		{
-			collectInheritedFieldsForGEP(classType, orderedFields, new java.util.HashSet<>());
-		}
 		for (Symbol s : ct.getMemberScope().getSymbols().values())
 		{
 			if (s instanceof VariableSymbol field && !field.getName().equals("this"))
@@ -4207,29 +4049,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		return null;
 	}
 
-	/**
-	 * Mirrors {@link LLVMTypeMapper#collectInheritedFields} to build the same ordered
-	 * field list for GEP index computation.
-	 */
-	private void collectInheritedFieldsForGEP(
-			ClassType classType,
-			java.util.List<VariableSymbol> out,
-			java.util.Set<String> seen)
-	{
-		for (ClassType parent : classType.getParentTypes())
-		{
-			collectInheritedFieldsForGEP(parent, out, seen);
-			for (Symbol s : parent.getMemberScope().getSymbols().values())
-			{
-				if (s instanceof VariableSymbol vs
-						&& !vs.getName().equals("this")
-						&& seen.add(vs.getName()))
-				{
-					out.add(vs);
-				}
-			}
-		}
-	}
+
 
 	@Override
 	public LLVMValueRef visitIndexExpression(IndexExpression node)
@@ -4441,8 +4261,50 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		if (count == 0)
 			return null;
 
-		// Use the SA-inferred TupleType to produce a consistent named LLVM struct.
+		// Use the SA-inferred type.  If it is a CompositeType (struct), the tuple
+		// literal is being used as a positional struct initialization.
 		Type semType = analyzer.getType(node);
+
+		if (semType instanceof CompositeType ct)
+		{
+			// Struct initialization via tuple literal: T var = (val1, val2, ...)
+			CompositeType resolvedCt = ct;
+			if (currentSubstitution != null)
+			{
+				Type subst = currentSubstitution.substitute(ct);
+				if (subst instanceof CompositeType substCt)
+					resolvedCt = substCt;
+			}
+			LLVMTypeRef structLlvmType = LLVMTypeMapper.getOrCreateStructType(context, resolvedCt);
+			LLVMValueRef alloca = LLVMBuildAlloca(builder, structLlvmType, resolvedCt.name() + "_init");
+
+			// Collect ordered fields from the member scope.
+			java.util.List<org.nebula.nebc.semantic.symbol.VariableSymbol> orderedFields = new java.util.ArrayList<>();
+			for (org.nebula.nebc.semantic.symbol.Symbol s : resolvedCt.getMemberScope().getSymbols().values())
+			{
+				if (s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs && !vs.getName().equals("this"))
+					orderedFields.add(vs);
+			}
+
+			for (int i = 0; i < count && i < orderedFields.size(); i++)
+			{
+				Expression elemExpr = node.elements.get(i);
+				LLVMValueRef elemVal = elemExpr.accept(this);
+				Type fieldType = orderedFields.get(i).getType();
+				if (currentSubstitution != null)
+					fieldType = currentSubstitution.substitute(fieldType);
+				Type elemSemType = analyzer.getType(elemExpr);
+				LLVMValueRef castedVal = emitCast(elemVal, elemSemType, fieldType);
+
+				LLVMValueRef fieldPtr = LLVMBuildStructGEP2(builder, structLlvmType, alloca, i,
+						orderedFields.get(i).getName() + "_init");
+				LLVMBuildStore(builder, castedVal, fieldPtr);
+			}
+
+			return LLVMBuildLoad2(builder, structLlvmType, alloca, resolvedCt.name() + "_val");
+		}
+
+		// Default: plain tuple.
 		LLVMTypeRef tupleType;
 		if (semType instanceof TupleType tt)
 		{

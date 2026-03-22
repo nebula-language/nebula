@@ -650,75 +650,35 @@ public interface NebulaParserListener extends ParseTreeListener {
 	 */
 	void exitOverloadable_operator(NebulaParser.Overloadable_operatorContext ctx);
 	/**
-	 * Enter a parse tree produced by {@link NebulaParser#class_declaration}.
+	 * Enter a parse tree produced by {@link NebulaParser#type_declaration}.
 	 * @param ctx the parse tree
 	 */
-	void enterClass_declaration(NebulaParser.Class_declarationContext ctx);
+	void enterType_declaration(NebulaParser.Type_declarationContext ctx);
 	/**
-	 * Exit a parse tree produced by {@link NebulaParser#class_declaration}.
+	 * Exit a parse tree produced by {@link NebulaParser#type_declaration}.
 	 * @param ctx the parse tree
 	 */
-	void exitClass_declaration(NebulaParser.Class_declarationContext ctx);
+	void exitType_declaration(NebulaParser.Type_declarationContext ctx);
 	/**
-	 * Enter a parse tree produced by {@link NebulaParser#class_body}.
+	 * Enter a parse tree produced by {@link NebulaParser#type_body}.
 	 * @param ctx the parse tree
 	 */
-	void enterClass_body(NebulaParser.Class_bodyContext ctx);
+	void enterType_body(NebulaParser.Type_bodyContext ctx);
 	/**
-	 * Exit a parse tree produced by {@link NebulaParser#class_body}.
+	 * Exit a parse tree produced by {@link NebulaParser#type_body}.
 	 * @param ctx the parse tree
 	 */
-	void exitClass_body(NebulaParser.Class_bodyContext ctx);
+	void exitType_body(NebulaParser.Type_bodyContext ctx);
 	/**
-	 * Enter a parse tree produced by {@link NebulaParser#class_member}.
+	 * Enter a parse tree produced by {@link NebulaParser#type_member}.
 	 * @param ctx the parse tree
 	 */
-	void enterClass_member(NebulaParser.Class_memberContext ctx);
+	void enterType_member(NebulaParser.Type_memberContext ctx);
 	/**
-	 * Exit a parse tree produced by {@link NebulaParser#class_member}.
+	 * Exit a parse tree produced by {@link NebulaParser#type_member}.
 	 * @param ctx the parse tree
 	 */
-	void exitClass_member(NebulaParser.Class_memberContext ctx);
-	/**
-	 * Enter a parse tree produced by {@link NebulaParser#struct_declaration}.
-	 * @param ctx the parse tree
-	 */
-	void enterStruct_declaration(NebulaParser.Struct_declarationContext ctx);
-	/**
-	 * Exit a parse tree produced by {@link NebulaParser#struct_declaration}.
-	 * @param ctx the parse tree
-	 */
-	void exitStruct_declaration(NebulaParser.Struct_declarationContext ctx);
-	/**
-	 * Enter a parse tree produced by {@link NebulaParser#struct_body}.
-	 * @param ctx the parse tree
-	 */
-	void enterStruct_body(NebulaParser.Struct_bodyContext ctx);
-	/**
-	 * Exit a parse tree produced by {@link NebulaParser#struct_body}.
-	 * @param ctx the parse tree
-	 */
-	void exitStruct_body(NebulaParser.Struct_bodyContext ctx);
-	/**
-	 * Enter a parse tree produced by {@link NebulaParser#struct_member}.
-	 * @param ctx the parse tree
-	 */
-	void enterStruct_member(NebulaParser.Struct_memberContext ctx);
-	/**
-	 * Exit a parse tree produced by {@link NebulaParser#struct_member}.
-	 * @param ctx the parse tree
-	 */
-	void exitStruct_member(NebulaParser.Struct_memberContext ctx);
-	/**
-	 * Enter a parse tree produced by {@link NebulaParser#inheritance_clause}.
-	 * @param ctx the parse tree
-	 */
-	void enterInheritance_clause(NebulaParser.Inheritance_clauseContext ctx);
-	/**
-	 * Exit a parse tree produced by {@link NebulaParser#inheritance_clause}.
-	 * @param ctx the parse tree
-	 */
-	void exitInheritance_clause(NebulaParser.Inheritance_clauseContext ctx);
+	void exitType_member(NebulaParser.Type_memberContext ctx);
 	/**
 	 * Enter a parse tree produced by {@link NebulaParser#trait_declaration}.
 	 * @param ctx the parse tree

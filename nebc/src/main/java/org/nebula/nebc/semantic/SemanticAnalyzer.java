@@ -56,6 +56,12 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	private boolean insideLoop = false;
 	private Type currentTypeDefinition = null;
 	private boolean isInsideExtern = false; // Flag for extern "C" blocks
+	/**
+	 * The expected type for the next expression being visited.
+	 * Used to contextually coerce tuple literals into struct initializations.
+	 * Set before visiting an initializer / assignment RHS / return value, then cleared.
+	 */
+	private Type expectedExpressionType = null;
 	/** Synthetic member scopes for primitive type trait implementations. */
 	private final Map<Type, SymbolTable> primitiveImplScopes = new HashMap<>();
 
@@ -255,18 +261,6 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					currentScope = enterNamespace(nd, globalScope);
 				}
-			}
-			else if (decl instanceof ClassDeclaration cd)
-			{
-				ClassType classType = new ClassType(cd.name, currentScope);
-				TypeSymbol sym = new TypeSymbol(cd.name, classType, cd);
-				classType.getMemberScope().setOwner(sym);
-				if (!currentScope.forceDefine(sym))
-				{
-					error(DiagnosticCode.TYPE_ALREADY_DEFINED, cd, cd.name);
-				}
-				if (!cd.attributes.isEmpty())
-					sym.setAttributes(collectAttributeInfos(cd.attributes));
 			}
 			else if (decl instanceof StructDeclaration sd)
 			{
@@ -622,44 +616,6 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 					currentScope = enterNamespace(nd, globalScope);
 				}
 			}
-			else if (decl instanceof ClassDeclaration cd)
-			{
-				TypeSymbol sym = currentScope.resolveType(cd.name);
-				if (sym == null || !(sym.getType() instanceof ClassType classType))
-					continue;
-
-				SymbolTable outerScope = currentScope;
-				Type prevTypeDef = currentTypeDefinition;
-				currentScope = classType.getMemberScope();
-				currentTypeDefinition = classType;
-				defineTypeParamsInScope(cd.typeParams, classType.getMemberScope());
-
-				// 'this' — no-op if already defined
-				currentScope.define(new VariableSymbol("this", classType, false, cd));
-
-				// Pre-declare each member signature, guarding against duplicates
-				for (Declaration member : cd.members)
-				{
-					if (member instanceof MethodDeclaration md
-							&& currentScope.resolveLocal(md.name) == null)
-					{
-						defineMethodSignature(md);
-					}
-					else if (member instanceof ConstructorDeclaration ctorDecl
-							&& currentScope.resolveLocal(ctorDecl.name) == null)
-					{
-						defineConstructorSignature(ctorDecl);
-					}
-					else if (member instanceof OperatorDeclaration od
-							&& currentScope.resolveLocal("operator" + od.operatorToken) == null)
-					{
-						defineOperatorSignature(od);
-					}
-				}
-
-				currentTypeDefinition = prevTypeDef;
-				currentScope = outerScope;
-			}
 			else if (decl instanceof StructDeclaration sd)
 			{
 				TypeSymbol sym = currentScope.resolveType(sd.name);
@@ -812,6 +768,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	 */
 	private void preRegisterImplSignatures(ImplDeclaration node)
 	{
+		// Non-trait impl: just pre-register method signatures on the target type scope.
+		if (node.traitType == null)
+		{
+			preRegisterNonTraitImplSignatures(node);
+			return;
+		}
+
 		Type traitResolved = resolveTagMemberType(node.traitType);
 		if (!(traitResolved instanceof TraitType traitType))
 			return;
@@ -892,6 +855,17 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					defineMethodSignature(method);
 					org.nebula.nebc.semantic.symbol.MethodSymbol ms = getSymbol(method, org.nebula.nebc.semantic.symbol.MethodSymbol.class);
+					if (ms != null)
+						ms.setTraitName(traitType.name());
+				}
+			}
+			for (OperatorDeclaration op : node.operators)
+			{
+				String opName = "operator" + op.operatorToken;
+				if (targetScope.resolveLocal(opName) == null)
+				{
+					defineOperatorSignature(op);
+					org.nebula.nebc.semantic.symbol.MethodSymbol ms = getSymbol(op, org.nebula.nebc.semantic.symbol.MethodSymbol.class);
 					if (ms != null)
 						ms.setTraitName(traitType.name());
 				}
@@ -1226,46 +1200,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	}
 
 	@Override
-	public Type visitClassDeclaration(ClassDeclaration node)
-	{
-		// The TypeSymbol was already forward-declared in Phase 1.
-		// Look it up and populate its member scope.
-		TypeSymbol existingSym = currentScope.resolveType(node.name);
-		if (existingSym == null)
-		{
-			error(DiagnosticCode.INTERNAL_ERROR, node, "class '" + node.name + "' was not forward-declared.");
-			return null;
-		}
-		// Record so codegen can retrieve the TypeSymbol via getSymbol(node, TypeSymbol.class).
-		recordSymbol(node, existingSym);
-		ClassType classType = (ClassType) existingSym.getType();
-		defineTypeParamsInScope(node.typeParams, classType.getMemberScope());
-		Type result = visitCompositeBody(node, classType, node.members);
-
-		// Trait implementation check (Phase 1.9 already handled ClassType parents)
-		for (org.nebula.nebc.ast.types.TypeNode inheritedNode : node.inheritance)
-		{
-			Type resolved = resolveType(inheritedNode);
-			if (resolved instanceof TraitType traitType)
-			{
-				String missing = traitType.findMissingMethod(classType);
-				if (missing != null)
-				{
-					error(DiagnosticCode.TYPE_MISMATCH, node, "Class '" + node.name + "' implements '" + traitType.name() + "' but is missing method '" + missing + "'");
-				}
-			}
-		}
-		return result;
-	}
-
-	@Override
 	public Type visitStructDeclaration(StructDeclaration node)
 	{
 		// The TypeSymbol was already forward-declared in Phase 1.
 		TypeSymbol existingSym = currentScope.resolveType(node.name);
 		if (existingSym == null)
 		{
-			error(DiagnosticCode.INTERNAL_ERROR, node, "struct '" + node.name + "' was not forward-declared.");
+			error(DiagnosticCode.INTERNAL_ERROR, node, "type '" + node.name + "' was not forward-declared.");
 			return null;
 		}
 		// Record so codegen can retrieve the TypeSymbol via getSymbol(node, TypeSymbol.class).
@@ -1647,18 +1588,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			{
 				error(DiagnosticCode.DUPLICATE_PARAMETER, node, param.name());
 			}
-			// CVT: Class-typed parameters arrive with a live region at method entry.
-			// Give each one a fresh, valid region ID so that drops calls inside the
-			// body can invalidate it and subsequent uses can be detected.
-			if (pType instanceof ClassType)
-			{
-				symbolRegion.put(paramSym, newRegion());
-				// Record CVT modifier so we can detect keeps-vs-drops violations.
-				if (param.cvtModifier() != null && param.cvtModifier() != CVTModifier.NONE)
-				{
-					paramCvtModifiers.put(paramSym, param.cvtModifier());
-				}
-			}
+
 			// Check default value type if present
 			if (param.defaultValue() != null)
 			{
@@ -1737,7 +1667,11 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 
 			if (decl.hasInitializer())
 			{
+				// Set expected type so tuple literals can be coerced to struct init.
+				Type prevExpected = expectedExpressionType;
+				expectedExpressionType = explicitType;
 				Type initType = decl.initializer().accept(this);
+				expectedExpressionType = prevExpected;
 
 				if (node.isVar)
 				{
@@ -1786,11 +1720,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					error(DiagnosticCode.DUPLICATE_SYMBOL, node, decl.name());
 				}
-				// CVT: Track the backing region for class-typed variables.
-				if (actualType instanceof ClassType && decl.hasInitializer())
-				{
-					trackNewVariableRegion(varSym, decl.initializer());
-				}
+
 			}
 		}
 		return PrimitiveType.VOID;
@@ -1815,7 +1745,10 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	@Override
 	public Type visitReturnStatement(ReturnStatement node)
 	{
+		Type prevExpected = expectedExpressionType;
+		expectedExpressionType = currentMethodReturnType;
 		Type valType = (node.value == null) ? PrimitiveType.VOID : node.value.accept(this);
+		expectedExpressionType = prevExpected;
 
 		if (currentMethodReturnType == null)
 		{
@@ -1912,7 +1845,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		{
 			itemType = arr.baseType;
 		}
-		else if (iterableType instanceof ClassType || iterableType instanceof StructType)
+		else if (iterableType instanceof StructType)
 		{
 			// Prefer inferred generic receiver bindings, e.g. ArrayList<T>::operator[] -> T
 			if (node.iterable instanceof IdentifierExpression ie)
@@ -2227,20 +2160,18 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		}
 		else if (targetType instanceof CompositeType compositeTarget)
 		{
-			// Constructor call — the identifier resolved directly to the TypeSymbol.
-			// Check whether the struct/class is generic; if so, look up its constructor
-			// MethodSymbol and perform type inference to monomorphize the return type.
+			// Type instantiation — the identifier resolved directly to the TypeSymbol.
+			// First check for an explicit constructor MethodSymbol (legacy / imported);
+			// if none exists, treat arguments as positional field initialization.
 			if (node.target instanceof IdentifierExpression ie)
 			{
-				// Qualified constructor call: std::fn::FnRef(x) has ie.name = "std::fn::FnRef".
-				// The constructor is stored in the member scope under the simple type name only
-				// (e.g. "FnRef"), so strip any namespace prefix before the lookup.
 				String ctorKey = ie.name.contains("::")
 						? ie.name.substring(ie.name.lastIndexOf("::") + 2)
 						: ie.name;
 				Symbol ctorSym = compositeTarget.getMemberScope().resolveLocal(ctorKey);
 				if (ctorSym instanceof MethodSymbol ctorMethod)
 				{
+					// Legacy path: explicit constructor exists (e.g. imported from .nebsym)
 					FunctionType ctorFnType = ctorMethod.getType();
 					List<Type> reducedParams = ctorFnType.parameterTypes.subList(1, ctorFnType.parameterTypes.size()); // skip REF
 					boolean hasTypeParams = reducedParams.stream().anyMatch(p -> p instanceof TypeParameterType);
@@ -2261,7 +2192,6 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 							fn = new FunctionType(concreteReturn, concreteParams);
 							targetType = concreteReturn;
 							methodSym = null;
-							// Record inferred type arguments on the node for codegen
 							List<Type> typeArgsList = new java.util.ArrayList<>();
 							for (java.util.Map.Entry<TypeParameterType, Type> entry : ctorSub.getMapping().entrySet())
 							{
@@ -2271,25 +2201,81 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 						}
 						else
 						{
-							fn = null; // fall through to simple constructor path
+							fn = null;
 						}
 					}
 					else
 					{
-						fn = null; // non-generic constructor
+						fn = null;
 					}
 				}
 				else
 				{
-					// No constructor symbol found at all.  For structs this is a hard error —
-					// unless all fields have default initializers, in which case an
-					// implicit zero-argument default construction is allowed.
-					if (compositeTarget instanceof StructType && !node.arguments.isEmpty())
+					// Direct initialization: T(val1, val2, ...) — positional field init.
+					// Collect the ordered field types from the member scope.
+					List<String> fieldNames = new java.util.ArrayList<>();
+					List<Type> fieldTypes = new java.util.ArrayList<>();
+					for (Symbol s : compositeTarget.getMemberScope().getSymbols().values())
 					{
-						error(DiagnosticCode.STRUCT_MISSING_CONSTRUCTOR, node, compositeTarget.name());
+						if (s instanceof VariableSymbol vs && !vs.getName().equals("this"))
+						{
+							fieldNames.add(vs.getName());
+							fieldTypes.add(vs.getType());
+						}
+					}
+
+					if (node.arguments.isEmpty() && !fieldTypes.isEmpty())
+					{
+						// Zero-arg with fields — allow only if all fields have defaults
+						// (handled downstream by canEmitImplicitDefaultStructCtor)
+						fn = null;
+					}
+					else if (node.arguments.size() != fieldTypes.size())
+					{
+						error(DiagnosticCode.ARGUMENT_COUNT_MISMATCH, node,
+								fieldTypes.size(), node.arguments.size());
 						return Type.ERROR;
 					}
-					fn = null;
+					else
+					{
+						// Generic inference: if any field is a TypeParameterType, infer from args.
+						boolean hasTypeParams = fieldTypes.stream().anyMatch(t -> t instanceof TypeParameterType);
+						if (hasTypeParams)
+						{
+							Substitution fieldSub = new Substitution();
+							for (int i = 0; i < node.arguments.size(); i++)
+							{
+								Type argType = node.arguments.get(i).accept(this);
+								infer(fieldTypes.get(i), argType, fieldSub);
+							}
+							if (!fieldSub.isEmpty())
+							{
+								List<Type> concreteFields = fieldTypes.stream()
+									.map(fieldSub::substitute)
+									.collect(java.util.stream.Collectors.toList());
+								Type concreteReturn = fieldSub.substitute(compositeTarget);
+								fn = new FunctionType(concreteReturn, concreteFields);
+								targetType = concreteReturn;
+								methodSym = null;
+								List<Type> typeArgsList = new java.util.ArrayList<>();
+								for (java.util.Map.Entry<TypeParameterType, Type> entry : fieldSub.getMapping().entrySet())
+								{
+									typeArgsList.add(entry.getValue());
+								}
+								node.setTypeArguments(typeArgsList);
+							}
+							else
+							{
+								fn = null;
+							}
+						}
+						else
+						{
+							// Non-generic direct init: build a FunctionType matching the fields.
+							fn = new FunctionType(compositeTarget, fieldTypes);
+							methodSym = null;
+						}
+					}
 				}
 			}
 			else
@@ -2336,21 +2322,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				}
 			}
 
-			// Bare inherited member call: greet() inside Child.run() where greet() is defined
-			// in Base.  The resolved FunctionType has `this: Base` as its first parameter, but
-			// the call site provides no explicit receiver.  When we are inside a composite body
-			// (currentTypeDefinition != null) and the first param is a CompositeType that the
-			// current class is assignable to, synthesise an implicit 'this' expression.
-			if (node.target instanceof IdentifierExpression
-					&& !fn.parameterTypes.isEmpty()
-					&& fn.parameterTypes.get(0) instanceof CompositeType firstParamComposite
-					&& currentTypeDefinition instanceof ClassType callerClass
-					&& (callerClass == firstParamComposite || callerClass.isAssignableTo((ClassType) firstParamComposite))
-					&& effectiveArgs.size() < fn.parameterTypes.size())
-			{
-				// Inject a synthetic 'this' identifier as the implicit receiver
-				effectiveArgs.add(0, new org.nebula.nebc.ast.expressions.IdentifierExpression(node.getSpan(), "this"));
-			}
+
 
 			// Infer and persist receiver generic bindings even when the called method
 			// itself has no method-level type parameters (e.g. ArrayList<T>::add(T)).
@@ -2459,13 +2431,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			{
 				for (int i = 0; i < effectiveArgs.size(); i++)
 				{
+					Type paramType = fn.parameterTypes.get(i);
+					Type prevExpected = expectedExpressionType;
+					expectedExpressionType = paramType;
 					Type argType = effectiveArgs.get(i).accept(this);
-					// Suppress cascading type errors: if the argument already resolved
-					// to the error sentinel (e.g. after a CVT use-after-drop report),
-					// do not emit a redundant argument-type-mismatch error.
+					expectedExpressionType = prevExpected;
 					if (argType == Type.ERROR)
 						continue;
-					Type paramType = fn.parameterTypes.get(i);
 					if (!argType.isAssignableTo(paramType))
 					{
 						error(DiagnosticCode.ARGUMENT_TYPE_MISMATCH, effectiveArgs.get(i), (i + 1), paramType.name(), argType.name());
@@ -2894,7 +2866,12 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		assignmentTargetNode = node.target;
 
 		Type targetType = node.target.accept(this);
+
+		// Set expected type so tuple literals can be coerced to struct init.
+		Type prevExpected = expectedExpressionType;
+		expectedExpressionType = targetType;
 		Type valueType = node.value.accept(this);
+		expectedExpressionType = prevExpected;
 
 		// Clear LHS sentinel
 		assignmentTargetNode = null;
@@ -2936,34 +2913,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			return Type.ERROR;
 		}
 
-		// If assigning a class-typed variable, and RHS is a drops/consuming call,
-		// the old region should be invalidated (LUA). Handle simple identifier LHS here.
-		if (node.target instanceof IdentifierExpression id && valueType instanceof ClassType)
-		{
-			Symbol sym = currentScope.resolve(id.name);
-			if (sym instanceof VariableSymbol vs && vs.getType() instanceof ClassType)
-			{
-				// If RHS expression is a NewExpression, assign a fresh region
-				if (node.value instanceof NewExpression)
-				{
-					trackNewVariableRegion(vs, node.value);
-				}
-				else if (node.value instanceof IdentifierExpression srcId)
-				{
-					Symbol srcSym = currentScope.resolve(srcId.name);
-					if (srcSym instanceof VariableSymbol srcVs)
-					{
-						Integer srcRegion = symbolRegion.get(srcVs);
-						symbolRegion.put(vs, srcRegion != null ? srcRegion : newRegion());
-					}
-				}
-				else
-				{
-					// Conservative: create a fresh region
-					symbolRegion.put(vs, newRegion());
-				}
-			}
-		}
+
 
 		// Assignment is a statement; it produces no value. Recording it as VOID
 		// ensures that using an assignment as a tail return expression (without a
@@ -3140,11 +3090,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			String rvBase = compositeBaseName(receiverType.name());
 			if (fpBase.equals(rvBase))
 				return true;
-			// Class inheritance: receiver is a subclass of the parameter type
-			if (receiverType instanceof ClassType childClass
-					&& firstParam instanceof ClassType parentClass
-					&& childClass.isAssignableTo(parentClass))
-				return true;
+
 		}
 		// REF is the implicit 'this' pointer for struct/class methods (constructors).
 		if (firstParam == PrimitiveType.REF && receiverType instanceof CompositeType)
@@ -3905,6 +3851,54 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	@Override
 	public Type visitTupleLiteralExpression(TupleLiteralExpression node)
 	{
+		// Check if a contextual struct type is expected (e.g. from variable declaration,
+		// return type, or assignment target).  If so, coerce this tuple literal into a
+		// positional struct initialization.
+		Type expected = expectedExpressionType;
+		if (expected == null)
+			expected = currentMethodReturnType;   // arrow body / return statement
+
+		if (expected instanceof CompositeType ct)
+		{
+			// Collect the ordered fields from the target type's member scope.
+			java.util.List<org.nebula.nebc.semantic.symbol.VariableSymbol> orderedFields = new java.util.ArrayList<>();
+			for (org.nebula.nebc.semantic.symbol.Symbol s : ct.getMemberScope().getSymbols().values())
+			{
+				if (s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs && !vs.getName().equals("this"))
+					orderedFields.add(vs);
+			}
+
+			if (node.elements.size() > orderedFields.size())
+			{
+				error(DiagnosticCode.ARGUMENT_COUNT_MISMATCH, node,
+						orderedFields.size(), node.elements.size());
+			}
+			else
+			{
+				// Type-check each element against the corresponding field.
+				for (int i = 0; i < node.elements.size(); i++)
+				{
+					Type elemType = node.elements.get(i).accept(this);
+					Type fieldType = orderedFields.get(i).getType();
+					if (elemType != Type.ERROR && !elemType.isAssignableTo(fieldType))
+					{
+						// Allow integer literal narrowing
+						boolean narrowing = elemType instanceof PrimitiveType pi && pi.isInteger()
+								&& fieldType instanceof PrimitiveType pf && pf.isInteger()
+								&& node.elements.get(i) instanceof org.nebula.nebc.ast.expressions.LiteralExpression lit
+								&& lit.value instanceof Long lv && intLiteralFitsInType(lv, pf);
+						if (!narrowing)
+							error(DiagnosticCode.TYPE_MISMATCH, node.elements.get(i), fieldType.name(), elemType.name());
+					}
+				}
+			}
+
+			// Record the composite type — codegen uses this to emit struct init.
+			recordType(node, ct);
+			return ct;
+		}
+
+		// Default: treat as a plain tuple.
 		List<Type> elementTypes = new ArrayList<>();
 		for (Expression expr : node.elements)
 		{
@@ -4086,6 +4080,12 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	@Override
 	public Type visitImplDeclaration(ImplDeclaration node)
 	{
+		// Non-trait impl: impl Type { methods } — add methods directly to the type's member scope.
+		if (node.traitType == null)
+		{
+			return visitNonTraitImpl(node);
+		}
+
 		// 1. Resolve the trait — use resolveTagMemberType so TraitType is not
 		//    incorrectly blocked by the tag-as-value-type guard.
 		Type traitResolved = resolveTagMemberType(node.traitType);
@@ -4249,6 +4249,159 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		});
 	}
 
+	/**
+	 * Non-trait impl block: {@code impl Type { methods }}
+	 * Enters the target type's member scope, registers and visits method bodies.
+	 * No trait validation is performed.
+	 */
+	private Type visitNonTraitImpl(ImplDeclaration node)
+	{
+		// For generic targets like `impl Pair<A, B>`, resolve just the base
+		// composite type — do NOT call resolveTagMemberType which would
+		// monomorphize and strip the TypeParameterType symbols from the scope.
+		// The base type's member scope already has A, B from Phase 1.95.
+		Type targetType;
+		if (node.targetType instanceof NamedType implNt)
+		{
+			TypeSymbol baseSym = currentScope.resolveType(implNt.qualifiedName);
+			if (baseSym == null)
+			{
+				error(DiagnosticCode.UNKNOWN_TYPE, node.targetType, implNt.qualifiedName);
+				return null;
+			}
+			targetType = baseSym.getType();
+		}
+		else
+		{
+			targetType = resolveTagMemberType(node.targetType);
+		}
+
+		if (targetType == Type.ERROR)
+			return null;
+
+		SymbolTable targetScope;
+		if (targetType instanceof CompositeType composite)
+		{
+			targetScope = composite.getMemberScope();
+		}
+		else if (targetType instanceof PrimitiveType pt)
+		{
+			targetScope = primitiveImplScopes.computeIfAbsent(targetType, t ->
+			{
+				SymbolTable st = new SymbolTable(currentScope);
+				st.setOwner(new TypeSymbol(pt.name(), pt, null));
+				return st;
+			});
+			targetScope.addSuperScope(currentScope);
+		}
+		else
+		{
+			error(DiagnosticCode.TYPE_MISMATCH, node.targetType,
+					"impl target", targetType.name() + " (cannot add methods to this type)");
+			return null;
+		}
+
+		SymbolTable outerScope = currentScope;
+		currentScope = targetScope;
+		currentTypeDefinition = targetType;
+
+		try
+		{
+			targetScope.define(new VariableSymbol("this", targetType, false, node));
+
+			for (MethodDeclaration method : node.members)
+			{
+				if (targetScope.resolveLocal(method.name) == null)
+					defineMethodSignature(method);
+			}
+			for (OperatorDeclaration op : node.operators)
+			{
+				if (targetScope.resolveLocal("operator" + op.operatorToken) == null)
+					defineOperatorSignature(op);
+			}
+
+			for (MethodDeclaration method : node.members)
+			{
+				visitMethodDeclaration(method);
+			}
+			for (OperatorDeclaration op : node.operators)
+			{
+				visitOperatorDeclaration(op);
+			}
+		}
+		finally
+		{
+			currentScope = outerScope;
+			currentTypeDefinition = null;
+		}
+		return null;
+	}
+
+	/**
+	 * Pre-registers method signatures from a non-trait impl block onto the
+	 * target type's member scope without visiting method bodies.
+	 */
+	private void preRegisterNonTraitImplSignatures(ImplDeclaration node)
+	{
+		// For generic targets like `impl Pair<A, B>`, resolve just the base
+		// composite type to avoid monomorphization (same as visitNonTraitImpl).
+		Type targetType;
+		if (node.targetType instanceof NamedType implNt)
+		{
+			TypeSymbol baseSym = currentScope.resolveType(implNt.qualifiedName);
+			if (baseSym == null)
+				return;
+			targetType = baseSym.getType();
+		}
+		else
+		{
+			targetType = resolveTagMemberType(node.targetType);
+		}
+		if (targetType == Type.ERROR)
+			return;
+
+		SymbolTable targetScope;
+		if (targetType instanceof CompositeType composite)
+			targetScope = composite.getMemberScope();
+		else if (targetType instanceof PrimitiveType pt)
+		{
+			targetScope = primitiveImplScopes.computeIfAbsent(targetType, t ->
+			{
+				SymbolTable st = new SymbolTable(currentScope);
+				st.setOwner(new TypeSymbol(pt.name(), pt, null));
+				return st;
+			});
+			targetScope.addSuperScope(currentScope);
+		}
+		else
+			return;
+
+		SymbolTable outerScope = currentScope;
+		Type prevTypeDef = currentTypeDefinition;
+		currentScope = targetScope;
+		currentTypeDefinition = targetType;
+
+		try
+		{
+			targetScope.define(new VariableSymbol("this", targetType, false, node));
+			for (MethodDeclaration method : node.members)
+			{
+				if (targetScope.resolveLocal(method.name) == null)
+					defineMethodSignature(method);
+			}
+			for (OperatorDeclaration op : node.operators)
+			{
+				if (targetScope.resolveLocal("operator" + op.operatorToken) == null)
+					defineOperatorSignature(op);
+			}
+		}
+		finally
+		{
+			currentScope = outerScope;
+			currentTypeDefinition = prevTypeDef;
+		}
+	}
+
 	/** Resolves the impl scope for a given concrete type (primitive or composite). */
 	private SymbolTable resolveImplScopeForType(Type type)
 	{
@@ -4321,10 +4474,31 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				}
 			}
 
+			// Register operator signatures from impl block
+			for (OperatorDeclaration op : node.operators)
+			{
+				String opName = "operator" + op.operatorToken;
+				if (targetScope.resolveLocal(opName) == null)
+				{
+					defineOperatorSignature(op);
+				}
+				MethodSymbol ms = getSymbol(op, MethodSymbol.class);
+				if (ms != null)
+				{
+					ms.setTraitName(traitType.name());
+				}
+			}
+
 			// Now visit the bodies
 			for (MethodDeclaration method : node.members)
 			{
 				visitMethodDeclaration(method);
+			}
+
+			// Visit operator bodies
+			for (OperatorDeclaration op : node.operators)
+			{
+				visitOperatorDeclaration(op);
 			}
 
 			// 4. Validate all required trait methods are present

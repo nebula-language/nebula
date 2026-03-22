@@ -7,7 +7,7 @@ namespace std::net;
 // NetStream wraps a connected socket fd and provides buffered send/recv helpers
 // that deal in str values, hiding the raw Ref/i64 FFI surface.
 
-struct NetStream
+type NetStream
 {
     i64 fd;
 

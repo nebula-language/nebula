@@ -35,6 +35,6 @@ public class ClassDeclaration extends Declaration
 	@Override
 	public <R> R accept(ASTVisitor<R> visitor)
 	{
-		return visitor.visitClassDeclaration(this);
+		throw new UnsupportedOperationException("ClassDeclaration is no longer supported. Use StructDeclaration via the 'type' keyword.");
 	}
 }

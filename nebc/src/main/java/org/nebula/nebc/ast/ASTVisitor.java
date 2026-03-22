@@ -52,12 +52,7 @@ public interface ASTVisitor<R>
     R visitExternDeclaration(ExternDeclaration node);
 
     /**
-     * @grammar class name<T> : Base { members }
-     */
-    R visitClassDeclaration(ClassDeclaration node);
-
-    /**
-     * @grammar struct name<T> : Base { members }
+     * @grammar type name<T> { members }
      */
     R visitStructDeclaration(StructDeclaration node);
 

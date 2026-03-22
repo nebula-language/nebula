@@ -95,15 +95,6 @@ public class ASTPrinter implements ASTVisitor<String>
 	}
 
 	@Override
-	public String visitClassDeclaration(ClassDeclaration node)
-	{
-		return line("Class: " + node.name)
-			+ visitNodes("Attributes", node.attributes)
-			+ visitNodes("Inheritance", node.inheritance)
-			+ visitNodes("Members", node.members);
-	}
-
-	@Override
 	public String visitAttributeNode(AttributeNode node)
 	{
 		StringBuilder sb = new StringBuilder(line("#[" + node.path + "]"));

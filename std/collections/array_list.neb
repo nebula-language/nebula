@@ -14,7 +14,7 @@ namespace std::collections;
 
 // Runtime helpers 
 
-class ArrayList<T>
+type ArrayList<T>
 {
     private Ref  data;       // raw backing memory
     private i64  count;      // number of stored elements

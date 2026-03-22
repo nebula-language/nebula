@@ -178,6 +178,7 @@ public final class NativeCompiler
 				}
 				command.add("-Wl,-rpath,.");
 				command.add("-Wl,-rpath,..");
+				command.add("-Wl,--allow-shlib-undefined");
 				command.add("-L.");
 				command.add("-L..");
 
@@ -195,11 +196,29 @@ public final class NativeCompiler
 					for (org.nebula.nebc.io.SourceFile lib : linkLibraries)
 					{
 						String name = lib.path();
-						if (name.startsWith("lib") && name.endsWith(".so"))
+						if (java.nio.file.Path.of(name).isAbsolute() && name.endsWith(".so"))
+						{
+							// Direct-path shared library (e.g. /path/to/libneb.so).
+							// Prepend a patch .so if present alongside it, then link the main .so.
+							// Using full paths avoids -L/-lneb issues with partially-built shared libs.
+							java.io.File patchLib = new java.io.File(
+									new java.io.File(name).getParent(), "libneb_patch.so");
+							if (patchLib.exists())
+							{
+								command.add(patchLib.getAbsolutePath());
+								command.add("-Wl,-rpath," + patchLib.getParent());
+							}
+							command.add(name);
+						}
+						else if (name.startsWith("lib") && name.endsWith(".so"))
 						{
 							name = name.substring(3, name.length() - 3);
+							command.add("-l" + name);
 						}
-						command.add("-l" + name);
+						else
+						{
+							command.add("-l" + name);
+						}
 					}
 				}
 			}

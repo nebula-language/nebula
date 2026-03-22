@@ -15,7 +15,6 @@ import org.nebula.nebc.semantic.symbol.NamespaceSymbol;
 import org.nebula.nebc.semantic.symbol.Symbol;
 import org.nebula.nebc.semantic.symbol.TypeSymbol;
 import org.nebula.nebc.semantic.symbol.VariableSymbol;
-import org.nebula.nebc.semantic.types.ClassType;
 import org.nebula.nebc.semantic.types.CompositeType;
 import org.nebula.nebc.semantic.types.EnumType;
 import org.nebula.nebc.semantic.types.PrimitiveType;
@@ -67,7 +66,6 @@ final class AttributeRegistryEmitter
     // ── Symbol-kind constants (must mirror std::reflect::SymbolKind enum) ───────
 
     static final int KIND_METHOD = 0;
-    static final int KIND_CLASS  = 1;
     static final int KIND_STRUCT = 2;
     static final int KIND_ENUM   = 3;
     static final int KIND_TRAIT  = 4;
@@ -205,7 +203,6 @@ final class AttributeRegistryEmitter
         if (sym instanceof TypeSymbol ts)
         {
             Type t = ts.getType();
-            if (t instanceof ClassType)  return KIND_CLASS;
             if (t instanceof StructType) return KIND_STRUCT;
             if (t instanceof EnumType)   return KIND_ENUM;
             if (t instanceof TraitType)  return KIND_TRAIT;

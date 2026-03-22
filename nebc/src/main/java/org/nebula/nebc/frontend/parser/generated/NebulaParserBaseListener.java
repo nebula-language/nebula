@@ -787,85 +787,37 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterClass_declaration(NebulaParser.Class_declarationContext ctx) { }
+	@Override public void enterType_declaration(NebulaParser.Type_declarationContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void exitClass_declaration(NebulaParser.Class_declarationContext ctx) { }
+	@Override public void exitType_declaration(NebulaParser.Type_declarationContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterClass_body(NebulaParser.Class_bodyContext ctx) { }
+	@Override public void enterType_body(NebulaParser.Type_bodyContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void exitClass_body(NebulaParser.Class_bodyContext ctx) { }
+	@Override public void exitType_body(NebulaParser.Type_bodyContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterClass_member(NebulaParser.Class_memberContext ctx) { }
+	@Override public void enterType_member(NebulaParser.Type_memberContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void exitClass_member(NebulaParser.Class_memberContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterStruct_declaration(NebulaParser.Struct_declarationContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitStruct_declaration(NebulaParser.Struct_declarationContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterStruct_body(NebulaParser.Struct_bodyContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitStruct_body(NebulaParser.Struct_bodyContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterStruct_member(NebulaParser.Struct_memberContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitStruct_member(NebulaParser.Struct_memberContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterInheritance_clause(NebulaParser.Inheritance_clauseContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitInheritance_clause(NebulaParser.Inheritance_clauseContext ctx) { }
+	@Override public void exitType_member(NebulaParser.Type_memberContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *

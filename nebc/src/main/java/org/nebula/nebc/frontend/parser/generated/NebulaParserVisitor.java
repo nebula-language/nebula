@@ -397,47 +397,23 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitOverloadable_operator(NebulaParser.Overloadable_operatorContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#class_declaration}.
+	 * Visit a parse tree produced by {@link NebulaParser#type_declaration}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	T visitClass_declaration(NebulaParser.Class_declarationContext ctx);
+	T visitType_declaration(NebulaParser.Type_declarationContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#class_body}.
+	 * Visit a parse tree produced by {@link NebulaParser#type_body}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	T visitClass_body(NebulaParser.Class_bodyContext ctx);
+	T visitType_body(NebulaParser.Type_bodyContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#class_member}.
+	 * Visit a parse tree produced by {@link NebulaParser#type_member}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	T visitClass_member(NebulaParser.Class_memberContext ctx);
-	/**
-	 * Visit a parse tree produced by {@link NebulaParser#struct_declaration}.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	T visitStruct_declaration(NebulaParser.Struct_declarationContext ctx);
-	/**
-	 * Visit a parse tree produced by {@link NebulaParser#struct_body}.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	T visitStruct_body(NebulaParser.Struct_bodyContext ctx);
-	/**
-	 * Visit a parse tree produced by {@link NebulaParser#struct_member}.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	T visitStruct_member(NebulaParser.Struct_memberContext ctx);
-	/**
-	 * Visit a parse tree produced by {@link NebulaParser#inheritance_clause}.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	T visitInheritance_clause(NebulaParser.Inheritance_clauseContext ctx);
+	T visitType_member(NebulaParser.Type_memberContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#trait_declaration}.
 	 * @param ctx the parse tree

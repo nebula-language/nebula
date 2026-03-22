@@ -317,9 +317,7 @@ public class SymbolImporter
     {
         String        name = obj.get("name").getAsString();
         CompositeType type;
-        if (kind.equals("class"))
-            type = new ClassType(name, table);
-        else if (kind.equals("struct"))
+        if (kind.equals("class") || kind.equals("struct"))
             type = new StructType(name, table);
         else
             type = new TraitType(name, table);

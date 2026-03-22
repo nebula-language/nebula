@@ -207,14 +207,8 @@ public final class LLVMTypeMapper
 		LLVMTypeRef structType = LLVMStructCreateNamed(ctx, ct.name());
 		structTypes.put(ct.name(), structType);
 
-		// Collect fields: inherited parent fields first (depth-first, ancestors before child),
-		// then the child's own fields.  This mirrors C++ base-subobject layout so that
-		// casting a child pointer to its parent type is a valid no-op ptr cast.
+		// Collect fields directly from the member scope (no inheritance anymore).
 		java.util.List<org.nebula.nebc.semantic.symbol.VariableSymbol> fields = new java.util.ArrayList<>();
-		if (ct instanceof org.nebula.nebc.semantic.types.ClassType classType)
-		{
-			collectInheritedFields(classType, fields, new java.util.HashSet<>());
-		}
 		// Own fields (symbols defined directly in this scope, excluding 'this' and methods)
 		for (org.nebula.nebc.semantic.symbol.Symbol s : ct.getMemberScope().getSymbols().values())
 		{
@@ -250,32 +244,7 @@ public final class LLVMTypeMapper
 		structTypes.clear();
 	}
 
-	/**
-	 * Recursively collects all inherited field symbols for {@code classType} into
-	 * {@code out}, depth-first (most-distant ancestor first), skipping duplicates.
-	 * Only {@link VariableSymbol}s (not methods or 'this') are collected.
-	 */
-	private static void collectInheritedFields(
-			org.nebula.nebc.semantic.types.ClassType classType,
-			java.util.List<org.nebula.nebc.semantic.symbol.VariableSymbol> out,
-			java.util.Set<String> seen)
-	{
-		for (org.nebula.nebc.semantic.types.ClassType parent : classType.getParentTypes())
-		{
-			// Recurse into grandparents first
-			collectInheritedFields(parent, out, seen);
-			// Then add parent's own fields
-			for (org.nebula.nebc.semantic.symbol.Symbol s : parent.getMemberScope().getSymbols().values())
-			{
-				if (s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs
-						&& !vs.getName().equals("this")
-						&& seen.add(vs.getName()))
-				{
-					out.add(vs);
-				}
-			}
-		}
-	}
+
 
 	/**
 	 * Maps a {@link TupleType} to an LLVM anonymous struct.

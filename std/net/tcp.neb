@@ -12,7 +12,7 @@ namespace std::net;
 // TcpServer — a listening TCP socket
 // =============================================================================
 
-struct TcpServer
+type TcpServer
 {
     i64 fd;
 
@@ -51,7 +51,7 @@ struct TcpServer
 // TcpConn — a connected TCP stream (client or accepted server-side socket)
 // =============================================================================
 
-struct TcpConn
+type TcpConn
 {
     i64 fd;
 

@@ -122,15 +122,39 @@ public class Substitution
      */
     private CompositeType monomorphizeComposite(CompositeType ct)
     {
-        // Build the monomorphized name: e.g. "Pair<i32>", "Map<str,i32>"
+        // Build the monomorphized name: e.g. "Pair<i32, str>", "Map<str,i32>"
+        // IMPORTANT: iterate type parameters in their DECLARATION ORDER (from the
+        // LinkedHashMap member scope), not HashMap.entrySet() order (which is random).
         StringBuilder sb = new StringBuilder(extractBaseName(ct.name()));
         sb.append("<");
         boolean first = true;
-        for (Map.Entry<TypeParameterType, Type> entry : mapping.entrySet())
+        for (org.nebula.nebc.semantic.symbol.Symbol sym : ct.getMemberScope().getSymbols().values())
         {
-            if (!first) sb.append(",");
-            first = false;
-            sb.append(entry.getValue().name());
+            if (sym instanceof org.nebula.nebc.semantic.symbol.TypeSymbol tts
+                    && tts.getType() instanceof TypeParameterType tpt)
+            {
+                // Look up the concrete type for this parameter in declaration order.
+                Type concrete = mapping.get(tpt);
+                if (concrete == null)
+                {
+                    // Fallback: name-based match for TypeParameterType instances
+                    // created in different scopes.
+                    for (Map.Entry<TypeParameterType, Type> entry : mapping.entrySet())
+                    {
+                        if (entry.getKey().name().equals(tpt.name()))
+                        {
+                            concrete = entry.getValue();
+                            break;
+                        }
+                    }
+                }
+                if (concrete != null)
+                {
+                    if (!first) sb.append(",");
+                    first = false;
+                    sb.append(concrete.name());
+                }
+            }
         }
         sb.append(">");
         String monoName = sb.toString();
@@ -144,10 +168,8 @@ public class Substitution
         CompositeType monoType;
         if (ct instanceof UnionType)
             monoType = new UnionType(monoName, null);
-        else if (ct instanceof StructType)
-            monoType = new StructType(monoName, null);
         else
-            monoType = new ClassType(monoName, null);
+            monoType = new StructType(monoName, null);
         monoCache.put(ct.name(), monoType);
 
         // Set the scope owner to a synthetic TypeSymbol using the generic's BASE name
