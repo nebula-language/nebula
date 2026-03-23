@@ -41,50 +41,9 @@ private extern "C"
 }
 
 // =============================================================================
-// StringUtils trait
-// =============================================================================
-trait StringUtils
-{
-    // -- Metrics --------------------------------------------------------------
-    i64  length();
-    bool isEmpty();
-
-    // -- Character access -----------------------------------------------------
-    char charAt(i64 index);
-
-    // -- Search ---------------------------------------------------------------
-    i64? indexOf(str needle, i64 start);
-    i64? indexOfChar(char ch, i64 start);
-    i64? lastIndexOfChar(char ch);
-    bool contains(str needle);
-    bool startsWith(str prefix);
-    bool endsWith(str suffix);
-
-    // -- Extraction -----------------------------------------------------------
-    str substring(i64 start, i64 length);
-    str slice(i64 start, i64 end);
-
-    // -- Comparison -----------------------------------------------------------
-    bool equals(str other);
-    bool equalsIgnoreCase(str other);
-
-    // -- Transformation -------------------------------------------------------
-    str toLower();
-    str toUpper();
-    str trim();
-
-    // -- Building -------------------------------------------------------------
-    str concat(str other);
-    str concat3(str b, str c);
-
-    // -- Parsing --------------------------------------------------------------
-    i64? parseI64();
-}
-
-// =============================================================================
 // Implementation
 // =============================================================================
-impl StringUtils for str
+impl str
 {
     // -- Metrics --------------------------------------------------------------
     i64  length()  => neb_str_len(this)
