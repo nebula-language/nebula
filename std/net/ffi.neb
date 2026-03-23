@@ -11,7 +11,7 @@ namespace std::net;
 private extern "C"
 {
     // Socket creation / lifecycle
-    i64 neb_net_socket(i32 domain, i32 type, i32 protocol);
+    i64 neb_net_socket(i32 domain, i32 kind, i32 protocol);
     i32 neb_net_close(i64 fd);
     i32 neb_net_shutdown(i64 fd, i32 how);
 

@@ -11,10 +11,17 @@ type HashSet<T: Hashable>
 {
     private HashMap<T, bool> map;
 
+}
+
+impl HashSet<T: Hashable>
+{
+    /*
+    // Old, to revise
     HashSet()
     {
         this.map = new HashMap<T, bool>();
     }
+    */
 
     // -------------------------------------------------------------------------
     // Mutation

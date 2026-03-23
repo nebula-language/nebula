@@ -11,10 +11,11 @@ type NetStream
 {
     i64 fd;
 
-    NetStream(i64 fd)
-    {
-        this.fd = fd;
-    }
+}
+
+impl NetStream
+{
+    NetStream new(i64 fd) => (fd,)
 
     // -- Send -----------------------------------------------------------------
 
@@ -41,6 +42,12 @@ type NetStream
 
     // -- Lifecycle ------------------------------------------------------------
 
-    void shutdown(i32 how) { neb_net_shutdown(this.fd, how); }
-    void close()           { neb_net_close(this.fd); }
+    void shutdown(i32 how)
+    {
+        neb_net_shutdown(this.fd, how);
+    }
+    void close()
+    {
+        neb_net_close(this.fd);
+    }
 }

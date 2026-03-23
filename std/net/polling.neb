@@ -16,13 +16,11 @@ type EpollEvent
     u32 events;    // event bitmask (EPOLLIN, EPOLLOUT, …)
     u32 _pad;      // alignment padding
     u64 data;      // user data (typically file descriptor)
+}
 
-    EpollEvent(u32 events, u64 data)
-    {
-        this.events = events;
-        this._pad   = 0;
-        this.data   = data;
-    }
+impl EpollEvent
+{
+    EpollEvent new(u32 events, u64 data) => (events, 0, data)
 }
 
 // =============================================================================
@@ -34,15 +32,12 @@ type PollFd
     i32 fd;
     i32 events;
     i32 revents;
-
-    PollFd(i32 fd, i32 events)
-    {
-        this.fd      = fd;
-        this.events  = events;
-        this.revents = 0;
-    }
 }
 
+impl PollFd
+{
+    PollFd new(i32 fd, i32 events) => (fd, events, 0)
+}
 // =============================================================================
 // Epoll — epoll instance handle
 // =============================================================================
@@ -51,10 +46,11 @@ type Epoll
 {
     i64 fd; // epoll file descriptor
 
-    Epoll(i64 fd)
-    {
-        this.fd = fd;
-    }
+}
+
+impl Epoll
+{
+    Epoll new(i64 fd) => (fd,)
 
     // -- Registration ---------------------------------------------------------
 

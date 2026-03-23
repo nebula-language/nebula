@@ -14,12 +14,11 @@ type SockAddrIn
     i32 port;     // network byte order
     u32 addr;     // IPv4 address in network byte order; 0 = INADDR_ANY
 
-    SockAddrIn(i32 port, u32 addr)
-    {
-        this.family = AF_INET;
-        this.port   = neb_net_htons(port);
-        this.addr   = addr;
-    }
+}
+impl SockAddrIn
+{
+    // [ERR] /home/juanpa/dev/nebula/std/net/core.neb:20 - Argument count mismatch. Expected 3, got 2.
+    SockAddrIn new(i32 family, i32 port, u32 addr) => (family, port, addr)
 }
 
 // -----------------------------------------------------------------------------

@@ -89,6 +89,14 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	 */
 	private boolean currentFunctionIsVoidMain;
 	/**
+	 * The Nebula type of {@code this} in the method/operator currently being emitted.
+	 * Set alongside every {@code namedValues.put("this", alloca)} so that
+	 * {@code visitThisExpression} always loads with the concrete receiver type,
+	 * even when the same AST node is reused across tag-expansion iterations
+	 * (e.g. {@code impl Stringable for Signed} compiled separately for i8/i16/i32/i64).
+	 */
+	private Type currentThisType = null;
+	/**
 	 * Whether the current basic block has already been terminated (ret/br).
 	 */
 	private boolean currentBlockTerminated;
@@ -618,6 +626,8 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		currentFunctionIsVoidMain = isVoidMain;
 		Type prevReturnType = currentMethodReturnType;
 		currentMethodReturnType = returnType;
+		Type prevThisType = currentThisType;
+		currentThisType = null;
 		RegionTracker prevRegionTracker = regionTracker;
 		regionTracker = new RegionTracker(context, builder, module);
 
@@ -669,6 +679,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				LLVMValueRef alloca = LLVMBuildAlloca(builder, toLLVMType(thisType), "this");
 				LLVMBuildStore(builder, thisValue, alloca);
 				namedValues.put("this", alloca);
+				currentThisType = thisType;
 			}
 
 			// Nebula-level type index: starts after 'this' (if present).
@@ -747,6 +758,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		currentBlockTerminated = prevTerminated;
 		currentFunctionIsVoidMain = prevVoidMain;
 		currentMethodReturnType = prevReturnType;
+		currentThisType = prevThisType;
 		regionTracker = prevRegionTracker;
 		namedValues.clear();
 		namedValues.putAll(prevNamedValues);
@@ -1408,6 +1420,8 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		currentBlockTerminated = false;
 		Type prevReturnType = currentMethodReturnType;
 		currentMethodReturnType = returnType;
+		Type prevThisType = currentThisType;
+		currentThisType = null;
 
 		Map<String, LLVMValueRef> prevNamedValues = new HashMap<>(namedValues);
 		Set<String> prevInlineStructVars = new HashSet<>(inlineStructVars);
@@ -1425,6 +1439,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			LLVMValueRef alloca = LLVMBuildAlloca(builder, toLLVMType(thisType), "this");
 			LLVMBuildStore(builder, thisValue, alloca);
 			namedValues.put("this", alloca);
+			currentThisType = thisType;
 		}
 
 		for (int i = 0; i < node.parameters.size(); i++)
@@ -1468,6 +1483,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		currentFunction = prevFunction;
 		currentBlockTerminated = prevTerminated;
 		currentMethodReturnType = prevReturnType;
+		currentThisType = prevThisType;
 		namedValues.clear();
 		namedValues.putAll(prevNamedValues);
 		inlineStructVars.clear();
@@ -1529,6 +1545,8 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		currentBlockTerminated = false;
 		Type prevReturnType = currentMethodReturnType;
 		currentMethodReturnType = returnType;
+		Type prevThisType = currentThisType;
+		currentThisType = null;
 		RegionTracker prevRegionTracker = regionTracker;
 		regionTracker = new RegionTracker(context, builder, module);
 
@@ -1545,6 +1563,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		LLVMValueRef thisAlloca = LLVMBuildAlloca(builder, toLLVMType(thisType), "this");
 		LLVMBuildStore(builder, thisValue, thisAlloca);
 		namedValues.put("this", thisAlloca);
+		currentThisType = thisType;
 
 		for (int i = 0; i < node.parameters.size(); i++)
 		{
@@ -1586,6 +1605,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		currentFunction = prevFunction;
 		currentBlockTerminated = prevTerminated;
 		currentMethodReturnType = prevReturnType;
+		currentThisType = prevThisType;
 		regionTracker = prevRegionTracker;
 		namedValues.clear();
 		namedValues.putAll(prevNamedValues);
@@ -2775,6 +2795,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 	private Type getVariableType(Expression var)
 	{
+		Type inferredType = analyzer.getType(var);
+		if (inferredType != null)
+		{
+			return inferredType;
+		}
+
 		if (var instanceof IdentifierExpression idExpr)
 		{
 			org.nebula.nebc.semantic.symbol.Symbol sym = analyzer.getSymbol(var, org.nebula.nebc.semantic.symbol.VariableSymbol.class);
@@ -2791,6 +2817,13 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			return null;
 
 		Type srcSemType = analyzer.getType(node.expression);
+		// During tag-expansion (e.g. impl Stringable for Signed), the same AST node
+		// is reused for every tag variant but the analyzer's recorded type is fixed at
+		// the SA-time representative.  Use currentThisType so that an explicit cast
+		// like `(i64) this` emits the correct widening from i8/i16/i32, not a no-op.
+		if (node.expression instanceof ThisExpression && currentThisType != null)
+			srcSemType = currentThisType;
+
 		Type targetSemType = analyzer.getType(node);
 
 		return emitCast(val, srcSemType, targetSemType);
@@ -4348,7 +4381,10 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		LLVMValueRef pointer = namedValues.get("this");
 		if (pointer != null)
 		{
-			Type type = analyzer.getType(node);
+			// Prefer currentThisType (set per tag-expansion) over the stale analysed
+			// type, which is fixed once for the whole impl node and causes over-wide
+			// loads (e.g. `load i64` from an `i8` alloca) for narrower tag variants.
+			Type type = (currentThisType != null) ? currentThisType : analyzer.getType(node);
 			LLVMTypeRef expectedType = toLLVMType(type);
 			return LLVMBuildLoad2(builder, expectedType, pointer, "this_load");
 		}
@@ -5833,6 +5869,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		LLVMValueRef   savedFunction            = this.currentFunction;
 		boolean        savedTerminated          = this.currentBlockTerminated;
 		Type           savedRetType             = this.currentMethodReturnType;
+		Type           savedThisType            = this.currentThisType;
 		Map<String, LLVMValueRef> savedNamed    = new HashMap<>(this.namedValues);
 		Set<String>    savedInlineStruct        = new HashSet<>(this.inlineStructVars);
 		Map<String, Integer> savedArrayCounts   = new HashMap<>(this.arrayElementCounts);
@@ -5920,6 +5957,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				LLVMValueRef thisAlloca = LLVMBuildAlloca(erasedBuilder, toLLVMType(thisType), new BytePointer("this"));
 				LLVMBuildStore(erasedBuilder, thisVal, thisAlloca);
 				namedValues.put("this", thisAlloca);
+				currentThisType = thisType;
 			}
 			for (int i = 0; i < decl.parameters.size(); i++)
 			{
@@ -5977,6 +6015,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			this.currentFunction     = savedFunction;
 			this.currentBlockTerminated = savedTerminated;
 			this.currentMethodReturnType = savedRetType;
+			this.currentThisType     = savedThisType;
 			this.namedValues.clear();
 			this.namedValues.putAll(savedNamed);
 			this.inlineStructVars.clear();

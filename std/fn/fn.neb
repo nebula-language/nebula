@@ -102,13 +102,13 @@ trait Callable
 type FnRef
 {
     Ref raw;
+}
 
-    // Construct from an explicit raw pointer.  Prefer std::reflect::entry_fn()
-    // for registry-derived references.
-    FnRef(Ref ptr)
-    {
-        this.raw = ptr;
-    }
+impl FnRef
+{
+    // Construct from an explicit raw pointer.
+    // Prefer std::reflect::entry_fn() for registry-derived references.
+    FnRef new(Ref ptr) => (ptr,)
 
     // -------------------------------------------------------------------------
     // Validity

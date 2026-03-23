@@ -15,11 +15,11 @@ namespace std::net;
 type TcpServer
 {
     i64 fd;
+}
 
-    TcpServer(i64 fd)
-    {
-        this.fd = fd;
-    }
+impl TcpServer
+{
+    TcpServer new(i64 fd) => (fd,)
 
     // -- Lifecycle ------------------------------------------------------------
 
@@ -46,7 +46,6 @@ type TcpServer
         neb_net_close(this.fd);
     }
 }
-
 // =============================================================================
 // TcpConn — a connected TCP stream (client or accepted server-side socket)
 // =============================================================================
@@ -54,11 +53,11 @@ type TcpServer
 type TcpConn
 {
     i64 fd;
+}
 
-    TcpConn(i64 fd)
-    {
-        this.fd = fd;
-    }
+impl TcpConn
+{
+    TcpConn new(i64 fd) => (fd,)
 
     // -- I/O ------------------------------------------------------------------
 

@@ -125,15 +125,15 @@ private extern "C"
 type File
 {
     i64 fd;
+}
 
-    File(i64 fd)
-    {
-        this.fd = fd;
-    }
+impl File
+{
+    File new(i64 fd) => (fd,)
 
     // -- Construction via static open methods ---------------------------------
 
-    static OpenResult open(keeps str path, FileMode mode)
+    OpenResult open(keeps str path, FileMode mode)
     {
         i64 descriptor = match (mode)
         {
@@ -146,7 +146,7 @@ type File
         {
             return OpenResult.Err(FsError.IoError);
         }
-        return OpenResult.Ok(File(descriptor));
+        return OpenResult.Ok(File.new(descriptor));
     }
 
     // -- Status ---------------------------------------------------------------

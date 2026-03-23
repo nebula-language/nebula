@@ -102,4 +102,8 @@ Ref entry_fn_ptr(i64 idx) => __nebula_rt_attr_fn_ptr(idx)
 //   std::fn::FnRef fn = std::reflect::entry_fn(i);
 //   if (fn.isValid()) fn.call();
 //
-std::fn::FnRef entry_fn(i64 idx) => std::fn::FnRef(__nebula_rt_attr_fn_ptr(idx))
+
+
+// TODO: fix, for some reason not resolving FnRef.new() when using the FQN.
+// std::fn::FnRef entry_fn(i64 idx) => std::fn::FnRef.new(__nebula_rt_attr_fn_ptr(idx))
+std::fn::FnRef entry_fn(i64 idx) => FnRef.new(__nebula_rt_attr_fn_ptr(idx))
