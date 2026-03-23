@@ -135,6 +135,9 @@ public class SymbolImporter
                 case "trait":
                     table.define(importCompositeType(obj, table, globalScope, obj.get("kind").getAsString()));
                     break;
+                case "union":
+                    table.define(importUnionType(obj, table, globalScope));
+                    break;
                 case "enum":
                     table.define(importEnumType(obj, table));
                     break;
@@ -194,6 +197,19 @@ public class SymbolImporter
                 case "variable":
                     table.define(importVariable(obj, table));
                     break;
+                case "union":
+                {
+                    // Find the UnionType registered in pass 1 and import its member methods.
+                    String unionName = obj.get("name").getAsString();
+                    TypeSymbol unionSym = table.resolveType(unionName);
+                    if (unionSym != null && unionSym.getType() instanceof UnionType ut
+                            && obj.has("members"))
+                    {
+                        importMethodSymbols(obj.getAsJsonArray("members"),
+                                ut.getMemberScope(), globalScope);
+                    }
+                    break;
+                }
                 case "tag":
                 {
                     // Find the stub TagType registered in pass 1 and populate its members.
@@ -359,6 +375,28 @@ public class SymbolImporter
                 importTable(obj.getAsJsonArray("members"),
                         type.getMemberScope(), globalScope);
             }
+        }
+
+        if (obj.has("attributes"))
+            sym.setAttributes(importAttributes(obj.getAsJsonArray("attributes")));
+
+        return sym;
+    }
+
+    private TypeSymbol importUnionType(JsonObject obj, SymbolTable table, SymbolTable globalScope)
+    {
+        String    name      = obj.get("name").getAsString();
+        boolean   isPrivate = obj.has("is_private") && obj.get("is_private").getAsBoolean();
+        UnionType type      = new UnionType(name, table);
+        TypeSymbol sym      = new TypeSymbol(name, type, null, isPrivate);
+        type.getMemberScope().setOwner(sym);
+
+        // Pre-register before importing members so self-referential types resolve.
+        table.define(sym);
+
+        if (obj.has("members"))
+        {
+            importTable(obj.getAsJsonArray("members"), type.getMemberScope(), globalScope);
         }
 
         if (obj.has("attributes"))
@@ -596,7 +634,47 @@ public class SymbolImporter
                 return deep.getType();
         }
 
+        // .nebsym compatibility: older/exported symbol files may omit composite
+        // type-parameter metadata for generic types (e.g. HashMap<K, V>) while
+        // still referencing those parameters in member signatures. In that case,
+        // materialize the type parameter lazily in the owning composite scope
+        // instead of degrading it to <any>.
+        if (isLikelySingleLetterTypeParam(name))
+        {
+            TypeParameterType tpt = getOrCreateOwningCompositeTypeParam(name, table);
+            if (tpt != null)
+                return tpt;
+        }
+
         return Type.ANY;
+    }
+
+    private static boolean isLikelySingleLetterTypeParam(String name)
+    {
+        return name != null
+            && name.length() == 1
+            && Character.isUpperCase(name.charAt(0));
+    }
+
+    private TypeParameterType getOrCreateOwningCompositeTypeParam(String name, SymbolTable from)
+    {
+        SymbolTable scope = from;
+        while (scope != null)
+        {
+            Symbol owner = scope.getOwner();
+            if (owner instanceof TypeSymbol ts && ts.getType() instanceof CompositeType)
+            {
+                TypeSymbol existing = scope.resolveType(name);
+                if (existing != null && existing.getType() instanceof TypeParameterType tpt)
+                    return tpt;
+
+                TypeParameterType created = new TypeParameterType(name, null);
+                scope.define(new TypeSymbol(name, created, null));
+                return created;
+            }
+            scope = scope.getParent();
+        }
+        return null;
     }
 
     /**

@@ -633,6 +633,8 @@ primary_expression_start
     | THIS
     | NONE
     | array_literal
+    | IDENTIFIER type_argument_list    // generic type reference: ArrayList<T>
+    | qualified_name type_argument_list  // qualified generic: std::HashMap<K, V>
     | IDENTIFIER
     | qualified_name
     ;

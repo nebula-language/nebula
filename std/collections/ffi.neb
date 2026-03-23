@@ -1,13 +1,11 @@
-// Runtime helpers — implemented in runtime/core/allocator.c
+// ── Allocator FFI (namespace private) ───────────────────────────────────────────────────
 private extern "C"
 {
     Ref  neb_alloc(i64 size);
     Ref  neb_realloc(Ref ptr, i64 newSize);
     void neb_free(drops Ref ptr);
     void neb_memset(Ref ptr, i32 val, i64 bytes);
-    i64  neb_sizeof_ptr();
-
-    // Pointer-array element access (each slot is pointer-sized).
     Ref  neb_ptr_load(Ref base, i64 index);
     void neb_ptr_store(Ref base, i64 index, Ref value);
+    i64  neb_sizeof_ptr();
 }

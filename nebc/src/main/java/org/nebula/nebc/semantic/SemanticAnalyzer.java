@@ -1617,11 +1617,7 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			}
 
 			Type bodyType = node.body.accept(this);
-			if (returnType == PrimitiveType.VOID && bodyType != PrimitiveType.VOID)
-			{
-				error(DiagnosticCode.TYPE_MISMATCH, node.body, returnType.name(), bodyType.name());
-			}
-			else if (returnType != PrimitiveType.VOID && bodyType != PrimitiveType.VOID && !bodyType.isAssignableTo(returnType))
+			if (returnType != PrimitiveType.VOID && bodyType != PrimitiveType.VOID && !bodyType.isAssignableTo(returnType))
 			{
 				error(DiagnosticCode.TYPE_MISMATCH, node.body, returnType.name(), bodyType.name());
 			}
@@ -2712,6 +2708,33 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 
 		recordSymbol(node, sym);
 		Type result = sym.getType();
+		if (sym instanceof TypeSymbol && result instanceof CompositeType ct
+				&& node.explicitTypeArgs != null && !node.explicitTypeArgs.isBlank())
+		{
+			List<String> argNames = splitTopLevelTypeArgs(node.explicitTypeArgs);
+			List<TypeParameterType> typeParams = ct.getMemberScope().getSymbols().values().stream()
+				.filter(s -> s instanceof TypeSymbol tts && tts.getType() instanceof TypeParameterType)
+				.map(s -> (TypeParameterType) s.getType())
+				.collect(java.util.stream.Collectors.toList());
+
+			if (argNames.size() == typeParams.size() && !typeParams.isEmpty())
+			{
+				Substitution sub = new Substitution();
+				for (int i = 0; i < argNames.size(); i++)
+				{
+					String argName = argNames.get(i).trim();
+					Type concrete = resolveType(new NamedType(node.getSpan(), argName, java.util.Collections.emptyList()));
+					if (concrete != null && concrete != Type.ERROR)
+					{
+						sub.bind(typeParams.get(i), concrete);
+					}
+				}
+				if (!sub.isEmpty())
+				{
+					result = sub.substitute(ct);
+				}
+			}
+		}
 		recordType(node, result);
 		return result;
 	}
@@ -4090,6 +4113,18 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			return md.parameters;
 		if (decl instanceof ConstructorDeclaration cd)
 			return cd.parameters;
+
+		if (methodSym.getType() != null && methodSym.getType().parameterInfo != null)
+		{
+			java.util.List<Parameter> importedParams = new java.util.ArrayList<>();
+			for (ParameterInfo pi : methodSym.getType().parameterInfo)
+			{
+				if (pi == null || pi.name() == null || pi.name().equals("this"))
+					continue;
+				importedParams.add(new Parameter(pi.cvtModifier, null, pi.name(), null));
+			}
+			return importedParams;
+		}
 
 		return java.util.Collections.emptyList();
 	}

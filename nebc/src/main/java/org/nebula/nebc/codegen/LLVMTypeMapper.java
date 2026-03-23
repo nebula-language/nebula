@@ -221,11 +221,18 @@ public final class LLVMTypeMapper
 		{
 			Type fieldType = fields.get(i).getType();
 			// Struct fields that are other struct types must be stored inline (value
-			// semantics), not as opaque pointers.  map() returns ptr for composites,
-			// so we special-case StructType to use the actual named struct layout.
+			// semantics), not as opaque pointers. map() returns ptr for composites,
+			// so value-like composite fields need the concrete named struct layout.
 			if (fieldType instanceof org.nebula.nebc.semantic.types.StructType fieldSt)
 			{
 				fieldTypesArr[i] = getOrCreateStructType(ctx, fieldSt);
+			}
+			else if (fieldType instanceof org.nebula.nebc.semantic.types.CompositeType fieldCt
+					&& !(fieldCt instanceof org.nebula.nebc.semantic.types.ClassType)
+					&& !(fieldCt instanceof org.nebula.nebc.semantic.types.TraitType)
+					&& !(fieldCt instanceof org.nebula.nebc.semantic.types.UnionType))
+			{
+				fieldTypesArr[i] = getOrCreateStructType(ctx, fieldCt);
 			}
 			else
 			{

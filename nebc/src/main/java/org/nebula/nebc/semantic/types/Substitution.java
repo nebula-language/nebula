@@ -71,6 +71,13 @@ public class Substitution
             }
             return changed ? new TupleType(substitutedElements) : tt;
         }
+        if (type instanceof OptionalType ot)
+        {
+            Type substitutedInner = substitute(ot.innerType);
+            if (substitutedInner == ot.innerType)
+                return ot;
+            return new OptionalType(substitutedInner);
+        }
         if (type instanceof FunctionType ft)
         {
             Type substitutedReturn = substitute(ft.returnType);
@@ -103,11 +110,14 @@ public class Substitution
             if (cached != null)
                 return cached;
 
-            // Only monomorphize if the composite actually contains type-parameter fields
-            // and we have a non-empty substitution mapping.
+            // Only monomorphize if the composite actually references type parameters
+            // (in fields and/or method signatures) and we have a non-empty substitution mapping.
             boolean hasTypeParams = ct.getMemberScope().getSymbols().values().stream()
-                .anyMatch(s -> s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs
-                    && vs.getType() instanceof TypeParameterType);
+                .anyMatch(s -> (s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs
+                        && referencesTypeParam(vs.getType()))
+                    || (s instanceof org.nebula.nebc.semantic.symbol.MethodSymbol ms
+                        && (referencesTypeParam(ms.getType().returnType)
+                            || ms.getType().parameterTypes.stream().anyMatch(this::referencesTypeParam))));
             if (hasTypeParams && !mapping.isEmpty())
                 return monomorphizeComposite(ct);
 
@@ -194,13 +204,19 @@ public class Substitution
             {
                 // Substitute the method's function type (return type and param types)
                 FunctionType substitutedFnType = (FunctionType) substitute(ms.getType());
-                monoType.getMemberScope().define(
+                org.nebula.nebc.semantic.symbol.MethodSymbol monoMethod =
                     new org.nebula.nebc.semantic.symbol.MethodSymbol(
                         ms.getName(), substitutedFnType,
                         ms.getModifiers(),
                         ms.isExtern(),
                         ms.getDeclarationNode(),
-                        java.util.Collections.emptyList())); // type params resolved
+                        java.util.Collections.emptyList()); // type params resolved
+                monoMethod.setTraitName(ms.getTraitName());
+                monoMethod.setExplicitExternC(ms.isExplicitExternC());
+                monoMethod.setSyntheticStructural(ms.isSyntheticStructural());
+                monoMethod.setGenericBitcode(ms.getGenericBitcode());
+                monoMethod.setOverriddenMangledName(ms.getOverriddenMangledName());
+                monoType.getMemberScope().define(monoMethod);
             }
             // TypeSymbol entries (type params) are omitted — they are fully resolved now
         }
@@ -217,6 +233,27 @@ public class Substitution
     {
         int lt = name.indexOf('<');
         return lt >= 0 ? name.substring(0, lt) : name;
+    }
+
+    private boolean referencesTypeParam(Type type)
+    {
+        if (type == null)
+            return false;
+        if (type instanceof TypeParameterType)
+            return true;
+        if (type instanceof OptionalType ot)
+            return referencesTypeParam(ot.innerType);
+        if (type instanceof ArrayType at)
+            return referencesTypeParam(at.baseType);
+        if (type instanceof TupleType tt)
+            return tt.elementTypes.stream().anyMatch(this::referencesTypeParam);
+        if (type instanceof FunctionType ft)
+        {
+            if (referencesTypeParam(ft.returnType))
+                return true;
+            return ft.parameterTypes.stream().anyMatch(this::referencesTypeParam);
+        }
+        return false;
     }
 
     /** Returns {@code true} if there are no bindings in this substitution. */

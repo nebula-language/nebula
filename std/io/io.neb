@@ -7,7 +7,7 @@ trait Stringable {
     str toStr();
 }
 
-extern "C" {
+private extern "C" {
     void __nebula_rt_print(keeps str s);
     void __nebula_rt_println(keeps str s);
     str  __nebula_rt_io_read_line();

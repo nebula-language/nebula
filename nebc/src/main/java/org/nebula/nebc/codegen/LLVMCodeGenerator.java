@@ -237,6 +237,14 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		{
 			return LLVMBuildExtractValue(builder, value, 0, "str_cptr");
 		}
+		// str → Ref: extract the data pointer (field 0) so that (Ref)someStr gives the
+		// backing char* pointer.  Used by e.g. str.hashCode() => (i64)(Ref)this.
+		if (srcSemType == PrimitiveType.STR && targetSemType == PrimitiveType.REF)
+		{
+			if (LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMStructTypeKind)
+				return LLVMBuildExtractValue(builder, value, 0, "str_ref");
+			return value; // already a pointer
+		}
 		if (targetSemType instanceof OptionalType targetOpt)
 		{
 			// none (opt.<any>) being assigned to a concrete T? → emit typed none
@@ -255,6 +263,41 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		if (srcSemType instanceof PrimitiveType src && targetSemType instanceof PrimitiveType target)
 		{
+			// Ref/cstr (ptr) → integer: emit ptrtoint
+			// Handles e.g. (i64)(Ref)key, (i64)neb_ptr_load(...)
+			if ((src == PrimitiveType.REF || src == PrimitiveType.CSTR) && target.isInteger())
+			{
+				if (LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMPointerTypeKind)
+					return LLVMBuildPtrToInt(builder, value, targetType, "ptrtoint");
+				return value; // already an integer value
+			}
+			// integer → Ref/cstr: emit inttoptr
+			// Handles e.g. (Ref)state where state: i64
+			if (src.isInteger() && (target == PrimitiveType.REF || target == PrimitiveType.CSTR))
+			{
+				return LLVMBuildIntToPtr(builder, value, LLVMPointerTypeInContext(context, 0), "inttoptr");
+			}
+			// char → integer: char is i32 in LLVM; widen/narrow as needed
+			if (src == PrimitiveType.CHAR && target.isInteger())
+			{
+				int targetWidth = target.getBitWidth();
+				if (targetWidth > 32)
+					return LLVMBuildSExt(builder, value, targetType, "char_sext");
+				if (targetWidth < 32)
+					return LLVMBuildTrunc(builder, value, targetType, "char_trunc");
+				return value; // char → i32: same width, no-op
+			}
+			// integer → char: char is i32 in LLVM; widen/narrow as needed
+			if (src.isInteger() && target == PrimitiveType.CHAR)
+			{
+				LLVMTypeRef charType = LLVMInt32TypeInContext(context);
+				int srcWidth = src.getBitWidth();
+				if (srcWidth > 32)
+					return LLVMBuildTrunc(builder, value, charType, "int_to_char_trunc");
+				if (srcWidth < 32)
+					return LLVMBuildSExt(builder, value, charType, "int_to_char_sext");
+				return value; // i32 → char: same width, no-op
+			}
 			// Bool → integer: zero-extend i1 to target width
 			if (src == PrimitiveType.BOOL && target.isInteger())
 			{
@@ -1777,6 +1820,22 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 		LLVMValueRef valueGep = LLVMBuildStructGEP2(builder, optStructType, optAlloca, 1, "opt_val");
 		LLVMValueRef castedInner = emitCast(innerValue, innerSrcType, targetOpt.innerType);
+		if (targetOpt.innerType instanceof CompositeType innerCt
+				&& !(innerCt instanceof ClassType)
+				&& !(innerCt instanceof TraitType)
+				&& !(innerCt instanceof UnionType))
+		{
+			if (LLVMGetTypeKind(LLVMTypeOf(castedInner)) == LLVMPointerTypeKind)
+			{
+				LLVMTypeRef structTy = LLVMTypeMapper.getOrCreateStructType(context, innerCt);
+				LLVMValueRef loaded = LLVMBuildLoad2(builder, structTy, castedInner, "opt_heap_box_load");
+				castedInner = emitHeapBoxValue(innerCt, loaded);
+			}
+			else
+			{
+				castedInner = emitHeapBoxValue(innerCt, castedInner);
+			}
+		}
 		LLVMBuildStore(builder, castedInner, valueGep);
 
 		return LLVMBuildLoad2(builder, optStructType, optAlloca, "opt_val");
@@ -3002,12 +3061,29 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			}
 		}
 
+		Symbol targetSym = analyzer.getSymbol(node.target, Symbol.class);
+		if (targetSym instanceof MethodSymbol erasedImportedMethod
+				&& shouldUseImportedErasedAbi(node, erasedImportedMethod))
+		{
+			return emitImportedErasedAbiCall(node, erasedImportedMethod);
+		}
+
 		// Detect generic call and trigger monomorphization
 		if (node.getTypeArguments() != null && !node.getTypeArguments().isEmpty())
 		{
-			Symbol sym = analyzer.getSymbol(node.target, Symbol.class);
+			Symbol sym = targetSym;
 			if (sym instanceof MethodSymbol ms)
 			{
+				// Receiver-driven generic bindings (e.g. HashMap<K,V>::get) may attach
+				// type arguments at the call site even when the method itself has no
+				// method-level type parameters. Those calls should use the canonical
+				// linked symbol, not a synthesized specialization name.
+				if (ms.getTypeParameters().isEmpty())
+				{
+					function = null;
+				}
+				else
+				{
 				String specializationName = getSpecializationName(ms, node.getTypeArguments());
 				function = LLVMGetNamedFunction(module, specializationName);
 				if (function == null)
@@ -3024,21 +3100,35 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 					MethodDeclaration decl = (MethodDeclaration) ms.getDeclarationNode();
 					if (decl == null)
 					{
-						// The declaration is unavailable (imported from a .nebsym library).
-						// If this method carries pre-compiled erased bitcode, use vtable dispatch.
+						// Imported generic methods from .nebsym should use precompiled erased
+						// bitcode when available, even if they carry a canonical mangled name.
 						if (ms.getGenericBitcode() != null && ms.getGenericBitcode().length > 0)
 						{
 							function = emitErasedCall(node, ms);
 							currentSubstitution = prevSub;
 							return function;
 						}
-						throw new CodegenException(
-							"Cannot monomorphize generic method '" + ms.getName() +
-							"': its declaration node is unavailable and no erased bitcode is present.");
+
+						// Non-erased imported/extern symbols cannot be monomorphized here.
+						if (ms.getOverriddenMangledName() != null || ms.isExtern())
+						{
+							currentSubstitution = prevSub;
+							function = null;
+						}
+						else
+						{
+							throw new CodegenException(
+								"Cannot monomorphize generic method '" + ms.getName() +
+								"': its declaration node is unavailable and no erased bitcode is present.");
+						}
 					}
-					function = visitMethodDeclaration(decl);
+					else
+					{
+						function = visitMethodDeclaration(decl);
+					}
 
 					currentSubstitution = prevSub;
+				}
 				}
 			}
 			else if (sym instanceof TypeSymbol ts && ts.getType() instanceof CompositeType genericCt
@@ -3134,7 +3224,6 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				&& ft.parameterTypes.get(0) == PrimitiveType.REF
 				&& node.target instanceof IdentifierExpression)
 		{
-			Symbol targetSym = analyzer.getSymbol(node.target, Symbol.class);
 			if (targetSym instanceof MethodSymbol ms2
 					&& ms2.getDeclarationNode() instanceof org.nebula.nebc.ast.declarations.ConstructorDeclaration)
 			{
@@ -3445,10 +3534,63 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			if (currentSubstitution != null)
 				fieldType = currentSubstitution.substitute(fieldType);
 			Type argSemType = analyzer.getType(argNode);
-			LLVMValueRef castedVal = emitCast(argVal, argSemType, fieldType);
+			LLVMValueRef castedVal;
+			if (argSemType instanceof StructType argSt
+					&& fieldType instanceof CompositeType fieldCt
+					&& !(fieldCt instanceof ClassType)
+					&& !(fieldCt instanceof TraitType)
+					&& !(fieldCt instanceof UnionType))
+			{
+				if (LLVMGetTypeKind(LLVMTypeOf(argVal)) == LLVMPointerTypeKind)
+				{
+					LLVMTypeRef argStructType = LLVMTypeMapper.getOrCreateStructType(context, argSt);
+					castedVal = LLVMBuildLoad2(builder, argStructType, argVal, "field_struct_load");
+				}
+				else
+				{
+					castedVal = argVal;
+				}
+			}
+			else
+			{
+				castedVal = emitCast(argVal, argSemType, fieldType);
+			}
 
 			LLVMValueRef fieldPtr = LLVMBuildStructGEP2(builder, structLlvmType, alloca, i,
 					orderedFields.get(i).getName() + "_init");
+			LLVMTypeRef fieldStorageType = LLVMStructGetTypeAtIndex(structLlvmType, i);
+			if (fieldStorageType != null
+					&& LLVMGetTypeKind(fieldStorageType) == LLVMStructTypeKind)
+			{
+				LLVMValueRef aggregateVal = castedVal;
+				if (LLVMGetTypeKind(LLVMTypeOf(aggregateVal)) == LLVMPointerTypeKind)
+				{
+					aggregateVal = LLVMBuildLoad2(builder, fieldStorageType, aggregateVal, "field_inline_struct_load");
+				}
+				LLVMBuildStore(builder, aggregateVal, fieldPtr);
+				continue;
+			}
+			if (argSemType instanceof CompositeType argCt
+					&& !(argCt instanceof ClassType)
+					&& !(argCt instanceof TraitType)
+					&& !(argCt instanceof UnionType)
+					&& fieldStorageType != null
+					&& LLVMGetTypeKind(fieldStorageType) == LLVMPointerTypeKind)
+			{
+				LLVMValueRef stablePtr;
+				if (LLVMGetTypeKind(LLVMTypeOf(argVal)) == LLVMPointerTypeKind)
+				{
+					LLVMTypeRef argStructType = LLVMTypeMapper.getOrCreateStructType(context, argCt);
+					LLVMValueRef loaded = LLVMBuildLoad2(builder, argStructType, argVal, "field_heap_copy_load");
+					stablePtr = emitHeapBoxValue(argCt, loaded);
+				}
+				else
+				{
+					stablePtr = emitHeapBoxValue(argCt, argVal);
+				}
+				LLVMBuildStore(builder, stablePtr, fieldPtr);
+				continue;
+			}
 			LLVMBuildStore(builder, castedVal, fieldPtr);
 		}
 
@@ -3485,6 +3627,9 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 	private String getSpecializationName(MethodSymbol ms, List<Type> typeArgs)
 	{
+		if (ms.getOverriddenMangledName() != null || ms.isExtern())
+			return ms.getMangledName();
+
 		StringBuilder sb = new StringBuilder(ms.getMangledName());
 		sb.append("__");
 		for (Type t : typeArgs)
@@ -3722,7 +3867,9 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			{
 				mangledName = getSpecializationName(ms);
 			}
-			else if (baseType instanceof CompositeType ct && ct.name().contains("<"))
+			else if (baseType instanceof CompositeType ct
+					&& ct.name().contains("<")
+					&& ms.getDeclarationNode() != null)
 			{
 				// The base type is a monomorphized generic (e.g. Pair<i32>).  The method
 				// was emitted with a specialization suffix derived from the concrete type
@@ -3829,10 +3976,25 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				LLVMValueRef gep = emitMemberPointer(node);
 				if (gep != null)
 				{
+					int fieldIdx = -1;
+					java.util.List<VariableSymbol> orderedFields = new java.util.ArrayList<>();
+					for (Symbol s : ct.getMemberScope().getSymbols().values())
+					{
+						if (s instanceof VariableSymbol field && !field.getName().equals("this"))
+							orderedFields.add(field);
+					}
+					for (int i = 0; i < orderedFields.size(); i++)
+					{
+						if (orderedFields.get(i).getName().equals(node.memberName))
+						{
+							fieldIdx = i;
+							break;
+						}
+					}
 					// Struct-typed fields are stored inline — return the GEP pointer
 					// directly (like inline struct variables) so that chained member
 					// accesses (e.g. proj.package.name) GEP into the nested struct.
-					if (vs.getType() instanceof StructType)
+					if (vs.getType() instanceof StructType && fieldIdx >= 0 && !isIndirectCompositeFieldStorage(ct, fieldIdx))
 					{
 						return gep;
 					}
@@ -4080,6 +4242,13 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		}
 
 		return null;
+	}
+
+	private boolean isIndirectCompositeFieldStorage(CompositeType ct, int fieldIdx)
+	{
+		LLVMTypeRef structType = LLVMTypeMapper.getOrCreateStructType(context, ct);
+		LLVMTypeRef fieldType = LLVMStructGetTypeAtIndex(structType, fieldIdx);
+		return fieldType != null && LLVMGetTypeKind(fieldType) == LLVMPointerTypeKind;
 	}
 
 
@@ -4331,7 +4500,40 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 
 				LLVMValueRef fieldPtr = LLVMBuildStructGEP2(builder, structLlvmType, alloca, i,
 						orderedFields.get(i).getName() + "_init");
-				LLVMBuildStore(builder, castedVal, fieldPtr);
+				LLVMTypeRef fieldStorageType = LLVMStructGetTypeAtIndex(structLlvmType, i);
+				if (fieldStorageType != null && LLVMGetTypeKind(fieldStorageType) == LLVMStructTypeKind)
+				{
+					LLVMValueRef aggregateVal = castedVal;
+					if (LLVMGetTypeKind(LLVMTypeOf(aggregateVal)) == LLVMPointerTypeKind)
+					{
+						aggregateVal = LLVMBuildLoad2(builder, fieldStorageType, aggregateVal, "tuple_field_inline_struct_load");
+					}
+					LLVMBuildStore(builder, aggregateVal, fieldPtr);
+				}
+				else if (fieldStorageType != null
+						&& LLVMGetTypeKind(fieldStorageType) == LLVMPointerTypeKind
+						&& elemSemType instanceof CompositeType elemCt
+						&& !(elemCt instanceof ClassType)
+						&& !(elemCt instanceof TraitType)
+						&& !(elemCt instanceof UnionType))
+				{
+					LLVMValueRef stablePtr;
+					if (LLVMGetTypeKind(LLVMTypeOf(elemVal)) == LLVMPointerTypeKind)
+					{
+						LLVMTypeRef elemStructType = LLVMTypeMapper.getOrCreateStructType(context, elemCt);
+						LLVMValueRef loaded = LLVMBuildLoad2(builder, elemStructType, elemVal, "tuple_field_heap_copy_load");
+						stablePtr = emitHeapBoxValue(elemCt, loaded);
+					}
+					else
+					{
+						stablePtr = emitHeapBoxValue(elemCt, elemVal);
+					}
+					LLVMBuildStore(builder, stablePtr, fieldPtr);
+				}
+				else
+				{
+					LLVMBuildStore(builder, castedVal, fieldPtr);
+				}
 			}
 
 			return LLVMBuildLoad2(builder, structLlvmType, alloca, resolvedCt.name() + "_val");
@@ -6110,6 +6312,14 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 	{
 		String erasedName = ms.getMangledName() + "__erased";
 
+		if (ms.getType().getReturnType() == PrimitiveType.VOID
+				&& node.arguments.size() == 1
+				&& node.arguments.get(0) instanceof NullCoalescingExpression nc
+				&& ms.getTypeParameters().size() == 1)
+		{
+			return emitErasedNullCoalescingCall(node, ms, nc, erasedName);
+		}
+
 		// ── 1. Link the bitcode module (idempotent) ──────────────────────────────────
 		if (!linkedErasedFunctions.contains(erasedName))
 		{
@@ -6141,6 +6351,11 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		List<Type> typeArgs = (node.getTypeArguments() != null && !node.getTypeArguments().isEmpty())
 				? node.getTypeArguments()
 				: inferTypeArgsForErased(ms, argNodes);
+		if (typeArgs.stream().anyMatch(t -> t == Type.ANY))
+		{
+			String argNames = typeArgs.stream().map(Type::name).collect(java.util.stream.Collectors.joining(","));
+			System.err.println("[DBG] erased call has <any>: method=" + ms.getName() + " mangled=" + ms.getMangledName() + " typeArgs=[" + argNames + "]");
+		}
 
 		List<LLVMValueRef> callArgs = new ArrayList<>();
 
@@ -6221,6 +6436,12 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			TypeParameterType tpt = ms.getTypeParameters().get(i);
 			if (tpt.hasBound() && i < typeArgs.size())
 			{
+				if (typeArgs.get(i) == Type.ANY)
+				{
+					throw new CodegenException("DBG any type arg for erased call: method="
+							+ ms.getName() + ", mangled=" + ms.getMangledName()
+							+ ", typeParam=" + tpt.name());
+				}
 				TraitType effectiveTrait = resolveEffectiveTrait(tpt.getBound());
 				if (effectiveTrait != null)
 				{
@@ -6237,6 +6458,359 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		String callName = retType == PrimitiveType.VOID ? "" : "erased_call";
 		return LLVMBuildCall2(builder, erasedFnType, erasedFn,
 				new PointerPointer<>(argsArr), argsArr.length, callName);
+	}
+
+	private LLVMValueRef emitSingleErasedGenericCall(
+			LLVMValueRef erasedFn,
+			Type actualType,
+			LLVMValueRef actualValue,
+			MethodSymbol ms)
+	{
+		LLVMValueRef boxedArg;
+		if (actualType instanceof CompositeType ct)
+		{
+			if (LLVMGetTypeKind(LLVMTypeOf(actualValue)) == LLVMPointerTypeKind)
+			{
+				boxedArg = actualValue;
+			}
+			else
+			{
+				LLVMTypeRef structTy = LLVMTypeMapper.getOrCreateStructType(context, ct);
+				LLVMValueRef alloca = LLVMBuildAlloca(builder, structTy, new BytePointer("erased_branch_box"));
+				LLVMBuildStore(builder, actualValue, alloca);
+				boxedArg = alloca;
+			}
+		}
+		else
+		{
+			LLVMTypeRef boxTy = toLLVMType(actualType);
+			LLVMValueRef alloca = LLVMBuildAlloca(builder, boxTy, new BytePointer("erased_branch_box"));
+			LLVMBuildStore(builder, actualValue, alloca);
+			boxedArg = alloca;
+		}
+
+		TypeParameterType tpt = ms.getTypeParameters().get(0);
+		TraitType effectiveTrait = resolveEffectiveTrait(tpt.getBound());
+		LLVMValueRef vtable = effectiveTrait != null
+				? getOrCreateConcreteVtable(effectiveTrait, actualType)
+				: LLVMConstNull(LLVMPointerTypeInContext(context, 0));
+
+		LLVMTypeRef erasedFnType = LLVMGlobalGetValueType(erasedFn);
+		LLVMValueRef[] argsArr = {boxedArg, vtable};
+		return LLVMBuildCall2(builder, erasedFnType, erasedFn,
+				new PointerPointer<>(argsArr), argsArr.length, "");
+	}
+
+	private LLVMValueRef emitErasedNullCoalescingCall(
+			InvocationExpression node,
+			MethodSymbol ms,
+			NullCoalescingExpression nc,
+			String erasedName)
+	{
+		if (!linkedErasedFunctions.contains(erasedName))
+		{
+			linkErasedBitcode(ms, erasedName);
+			linkedErasedFunctions.add(erasedName);
+		}
+
+		LLVMValueRef erasedFn = LLVMGetNamedFunction(module, new BytePointer(erasedName));
+		if (erasedFn == null || erasedFn.isNull())
+			throw new CodegenException("Erased function '" + erasedName + "' not found after linking");
+
+		LLVMValueRef optVal = nc.left.accept(this);
+		Type leftType = analyzer.getType(nc.left);
+		if (!(leftType instanceof OptionalType ot))
+		{
+			LLVMValueRef fallbackVal = nc.right.accept(this);
+			Type fallbackType = analyzer.getType(nc.right);
+			return emitSingleErasedGenericCall(erasedFn, fallbackType, fallbackVal, ms);
+		}
+
+		LLVMValueRef presentFlag = LLVMBuildExtractValue(builder, optVal, 0, "erased_coalesce_present");
+		LLVMBasicBlockRef presentBB = LLVMAppendBasicBlockInContext(context, currentFunction, "erased_coalesce_present");
+		LLVMBasicBlockRef absentBB = LLVMAppendBasicBlockInContext(context, currentFunction, "erased_coalesce_absent");
+		LLVMBasicBlockRef mergeBB = LLVMAppendBasicBlockInContext(context, currentFunction, "erased_coalesce_merge");
+		LLVMBuildCondBr(builder, presentFlag, presentBB, absentBB);
+
+		LLVMPositionBuilderAtEnd(builder, presentBB);
+		LLVMValueRef innerVal = LLVMBuildExtractValue(builder, optVal, 1, "erased_coalesce_inner");
+		emitSingleErasedGenericCall(erasedFn, ot.innerType, innerVal, ms);
+		LLVMBuildBr(builder, mergeBB);
+
+		LLVMPositionBuilderAtEnd(builder, absentBB);
+		LLVMValueRef fallbackVal = nc.right.accept(this);
+		Type fallbackType = analyzer.getType(nc.right);
+		emitSingleErasedGenericCall(erasedFn, fallbackType, fallbackVal, ms);
+		LLVMBuildBr(builder, mergeBB);
+
+		LLVMPositionBuilderAtEnd(builder, mergeBB);
+		return null;
+	}
+
+	private MethodSymbol resolveOriginalImportedGenericMethod(InvocationExpression node, MethodSymbol ms)
+	{
+		if (!(node.target instanceof MemberAccessExpression mae))
+			return ms;
+		Type receiverType = analyzer.getType(mae.target);
+		if (!(receiverType instanceof CompositeType receiverCt) || !receiverCt.name().contains("<"))
+			return ms;
+
+		String baseName = extractBaseTypeName(receiverCt.name());
+		Symbol ownerSym = analyzer.getGlobalScope().resolveType(baseName);
+		if (!(ownerSym instanceof org.nebula.nebc.semantic.symbol.TypeSymbol ownerTs)
+				|| !(ownerTs.getType() instanceof CompositeType ownerCt))
+			return ms;
+
+		Symbol rawMember = ownerCt.getMemberScope().resolveLocal(ms.getName());
+		return rawMember instanceof MethodSymbol rawMs ? rawMs : ms;
+	}
+
+	private boolean shouldUseImportedErasedAbi(InvocationExpression node, MethodSymbol ms)
+	{
+		MethodSymbol rawMs = resolveOriginalImportedGenericMethod(node, ms);
+		if (rawMs.getDeclarationNode() != null)
+			return false;
+		if (rawMs.getGenericBitcode() != null && rawMs.getGenericBitcode().length > 0)
+			return false;
+		if (rawMs.isExtern())
+			return false;
+		return referencesTypeParam(rawMs.getType());
+	}
+
+	private boolean referencesTypeParam(Type type)
+	{
+		if (type == null)
+			return false;
+		if (type instanceof TypeParameterType)
+			return true;
+		if (type instanceof OptionalType ot)
+			return referencesTypeParam(ot.innerType);
+		if (type instanceof ArrayType at)
+			return referencesTypeParam(at.baseType);
+		if (type instanceof TupleType tt)
+			return tt.elementTypes.stream().anyMatch(this::referencesTypeParam);
+		if (type instanceof FunctionType ft)
+		{
+			if (referencesTypeParam(ft.returnType))
+				return true;
+			return ft.parameterTypes.stream().anyMatch(this::referencesTypeParam);
+		}
+		return false;
+	}
+
+	private Type eraseImportedGenericType(Type type)
+	{
+		if (type instanceof TypeParameterType)
+			return PrimitiveType.REF;
+		if (type instanceof OptionalType ot)
+		{
+			Type erasedInner = eraseImportedGenericType(ot.innerType);
+			return erasedInner == ot.innerType ? ot : new OptionalType(erasedInner);
+		}
+		if (type instanceof ArrayType at)
+		{
+			Type erasedBase = eraseImportedGenericType(at.baseType);
+			return erasedBase == at.baseType ? at : new ArrayType(erasedBase, at.elementCount);
+		}
+		if (type instanceof TupleType tt)
+		{
+			java.util.List<Type> erasedElems = tt.elementTypes.stream()
+				.map(this::eraseImportedGenericType)
+				.collect(java.util.stream.Collectors.toList());
+			boolean changed = false;
+			for (int i = 0; i < tt.elementTypes.size(); i++)
+			{
+				if (erasedElems.get(i) != tt.elementTypes.get(i))
+				{
+					changed = true;
+					break;
+				}
+			}
+			return changed ? new TupleType(erasedElems) : tt;
+		}
+		if (type instanceof FunctionType ft)
+		{
+			Type erasedRet = eraseImportedGenericType(ft.returnType);
+			java.util.List<Type> erasedParams = ft.parameterTypes.stream()
+				.map(this::eraseImportedGenericType)
+				.collect(java.util.stream.Collectors.toList());
+			boolean changed = erasedRet != ft.returnType;
+			if (!changed)
+			{
+				for (int i = 0; i < ft.parameterTypes.size(); i++)
+				{
+					if (erasedParams.get(i) != ft.parameterTypes.get(i))
+					{
+						changed = true;
+						break;
+					}
+				}
+			}
+			return changed ? new FunctionType(erasedRet, erasedParams, ft.parameterInfo) : ft;
+		}
+		return type;
+	}
+
+	private boolean receiverMatchesImportedGenericFirstParam(Type receiverType, Type firstParam)
+	{
+		if (firstParam == PrimitiveType.REF && receiverType instanceof CompositeType)
+			return true;
+		if (receiverType instanceof CompositeType receiverCt && firstParam instanceof CompositeType firstCt)
+			return extractBaseTypeName(receiverCt.name()).equals(extractBaseTypeName(firstCt.name()));
+		return receiverType != null && firstParam != null && receiverType.name().equals(firstParam.name());
+	}
+
+	private String extractBaseTypeName(String name)
+	{
+		int lt = name.indexOf('<');
+		return lt >= 0 ? name.substring(0, lt) : name;
+	}
+
+	private LLVMValueRef emitHeapBoxValue(Type concreteType, LLVMValueRef value)
+	{
+		LLVMValueRef nebAlloc = LLVMGetNamedFunction(module, "neb_alloc");
+		if (nebAlloc == null || nebAlloc.isNull())
+		{
+			FunctionType allocType = new FunctionType(PrimitiveType.REF, java.util.List.of(PrimitiveType.U64), null);
+			nebAlloc = LLVMAddFunction(module, "neb_alloc", toLLVMType(allocType));
+		}
+
+		LLVMTypeRef boxedType;
+		if (concreteType instanceof StructType st)
+			boxedType = LLVMTypeMapper.getOrCreateStructType(context, st);
+		else if (concreteType instanceof TupleType tt)
+			boxedType = LLVMTypeMapper.getOrCreateTupleType(context, tt);
+		else
+			boxedType = toLLVMType(concreteType);
+
+		LLVMValueRef sizeVal = LLVMSizeOf(boxedType);
+		LLVMValueRef[] allocArgs = {sizeVal};
+		LLVMValueRef heapPtr = LLVMBuildCall2(builder,
+				toLLVMType(new FunctionType(PrimitiveType.REF, java.util.List.of(PrimitiveType.U64), null)),
+				nebAlloc,
+				new PointerPointer<>(allocArgs),
+				1,
+				"import_erased_heap_box");
+		LLVMBuildStore(builder, value, heapPtr);
+		return heapPtr;
+	}
+
+	private LLVMValueRef emitEncodeForImportedErasedAbi(LLVMValueRef value, Type concreteType, Type erasedTargetType)
+	{
+		if (erasedTargetType == PrimitiveType.REF)
+		{
+			if (concreteType == PrimitiveType.STR)
+				return emitCast(value, concreteType, PrimitiveType.REF);
+			if (concreteType == PrimitiveType.REF || concreteType == PrimitiveType.CSTR)
+				return value;
+			if (concreteType instanceof PrimitiveType pt)
+			{
+				if (pt == PrimitiveType.BOOL || pt == PrimitiveType.CHAR)
+				{
+					LLVMValueRef widened = emitCast(value, pt, PrimitiveType.I64);
+					return emitCast(widened, PrimitiveType.I64, PrimitiveType.REF);
+				}
+				if (pt.isInteger())
+					return emitCast(value, pt, PrimitiveType.REF);
+			}
+			if (concreteType instanceof CompositeType ct)
+			{
+				if (LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMPointerTypeKind)
+					return value;
+				return emitHeapBoxValue(ct, value);
+			}
+		}
+		return emitCast(value, concreteType, erasedTargetType);
+	}
+
+	private LLVMValueRef emitDecodeImportedErasedValue(LLVMValueRef erasedValue, Type concreteType)
+	{
+		if (concreteType instanceof StructType st)
+		{
+			LLVMTypeRef structTy = LLVMTypeMapper.getOrCreateStructType(context, st);
+			return LLVMBuildLoad2(builder, structTy, erasedValue, "import_erased_struct");
+		}
+		if (concreteType == PrimitiveType.BOOL)
+		{
+			LLVMValueRef asI64 = emitCast(erasedValue, PrimitiveType.REF, PrimitiveType.I64);
+			return emitCast(asI64, PrimitiveType.I64, PrimitiveType.BOOL);
+		}
+		if (concreteType == PrimitiveType.CHAR)
+		{
+			LLVMValueRef asI64 = emitCast(erasedValue, PrimitiveType.REF, PrimitiveType.I64);
+			return emitCast(asI64, PrimitiveType.I64, PrimitiveType.CHAR);
+		}
+		if (concreteType instanceof PrimitiveType pt && pt.isInteger())
+			return emitCast(erasedValue, PrimitiveType.REF, concreteType);
+		return emitCast(erasedValue, PrimitiveType.REF, concreteType);
+	}
+
+	private LLVMValueRef emitImportedErasedAbiCall(InvocationExpression node, MethodSymbol ms)
+	{
+		MethodSymbol rawMs = resolveOriginalImportedGenericMethod(node, ms);
+		FunctionType rawFt = rawMs.getType();
+		FunctionType erasedFt = (FunctionType) eraseImportedGenericType(rawFt);
+
+		java.util.List<Expression> argNodes = new java.util.ArrayList<>(node.arguments);
+		if (node.target instanceof MemberAccessExpression mae && !rawFt.getParameterTypes().isEmpty())
+		{
+			Type receiverType = analyzer.getType(mae.target);
+			if (receiverMatchesImportedGenericFirstParam(receiverType, rawFt.getParameterTypes().get(0)))
+				argNodes.add(0, mae.target);
+		}
+
+		if (argNodes.size() != erasedFt.getParameterTypes().size())
+			throw new CodegenException("Imported erased ABI arg count mismatch for '" + ms.getName() + "'");
+
+		LLVMTypeRef erasedFnType = LLVMTypeMapper.map(context, erasedFt);
+		LLVMValueRef function = LLVMGetNamedFunction(module, rawMs.getMangledName());
+		if (function == null || function.isNull())
+			function = LLVMAddFunction(module, rawMs.getMangledName(), erasedFnType);
+
+		LLVMValueRef[] argsArr = new LLVMValueRef[argNodes.size()];
+		for (int i = 0; i < argNodes.size(); i++)
+		{
+			Expression argNode = argNodes.get(i);
+			LLVMValueRef argVal = argNode.accept(this);
+			Type concreteArgType = analyzer.getType(argNode);
+			Type erasedParamType = erasedFt.getParameterTypes().get(i);
+			argsArr[i] = emitEncodeForImportedErasedAbi(argVal, concreteArgType, erasedParamType);
+		}
+
+		Type erasedRetType = erasedFt.getReturnType();
+		String callName = erasedRetType == PrimitiveType.VOID ? "" : "import_erased_call";
+		LLVMValueRef call = LLVMBuildCall2(builder, erasedFnType, function,
+				new PointerPointer<>(argsArr), argsArr.length, callName);
+
+		Type concreteRetType = analyzer.getType(node);
+		if (!(concreteRetType instanceof OptionalType targetOpt)
+				|| !(erasedRetType instanceof OptionalType erasedOpt)
+				|| erasedOpt.innerType != PrimitiveType.REF)
+		{
+			return call;
+		}
+
+		LLVMValueRef present = LLVMBuildExtractValue(builder, call, 0, "import_opt_present");
+		LLVMBasicBlockRef thenBB = LLVMAppendBasicBlockInContext(context, currentFunction, "import_opt_then");
+		LLVMBasicBlockRef elseBB = LLVMAppendBasicBlockInContext(context, currentFunction, "import_opt_else");
+		LLVMBasicBlockRef mergeBB = LLVMAppendBasicBlockInContext(context, currentFunction, "import_opt_merge");
+		LLVMBuildCondBr(builder, present, thenBB, elseBB);
+
+		LLVMTypeRef targetOptTy = LLVMTypeMapper.getOrCreateOptionalStructType(context, targetOpt);
+		LLVMValueRef resultAlloca = emitEntryAlloca(targetOptTy, "import_opt_result");
+
+		LLVMPositionBuilderAtEnd(builder, thenBB);
+		LLVMValueRef erasedPayload = LLVMBuildExtractValue(builder, call, 1, "import_opt_payload");
+		LLVMValueRef decoded = emitDecodeImportedErasedValue(erasedPayload, targetOpt.innerType);
+		LLVMBuildStore(builder, emitWrapInOptional(decoded, targetOpt.innerType, targetOpt), resultAlloca);
+		LLVMBuildBr(builder, mergeBB);
+
+		LLVMPositionBuilderAtEnd(builder, elseBB);
+		LLVMBuildStore(builder, emitNoneOfType(targetOpt), resultAlloca);
+		LLVMBuildBr(builder, mergeBB);
+
+		LLVMPositionBuilderAtEnd(builder, mergeBB);
+		return LLVMBuildLoad2(builder, targetOptTy, resultAlloca, "import_opt_value");
 	}
 
 	/**
@@ -6264,6 +6838,10 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				if (!resolved.containsKey(tpt.name()))
 				{
 					Type actual = analyzer.getType(argNodes.get(i - argOffset));
+					if (ms.getName() != null && ms.getName().endsWith("println"))
+					{
+						System.err.println("[DBG] erased infer println declared=" + tpt.name() + " actual=" + (actual == null ? "<null>" : actual.name()));
+					}
 					if (actual != null)
 						resolved.put(tpt.name(), actual);
 				}

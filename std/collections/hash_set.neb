@@ -1,0 +1,79 @@
+namespace std::collections;
+
+// =============================================================================
+// std::collections::HashSet<T: Hashable> — unordered set
+// =============================================================================
+//
+// A set backed by a HashMap<T, bool>.  Membership tests, additions, and
+// removals are O(1) average.
+//
+// Usage
+// ─────
+//   var seen = HashSet<str>();
+//   seen.add("hello");
+//   if (seen.contains("hello")) { println("yep"); }
+//   seen.remove("hello");
+
+type HashSet<T: Hashable>
+{
+    private HashMap<T, bool> map;
+}
+
+impl HashSet<T: Hashable>
+{
+    // ── Construction ──────────────────────────────────────────────────────────
+
+    HashSet<T> new() => (map: HashMap<T, bool>.new(),)
+
+    // ── Size ─────────────────────────────────────────────────────────────────
+
+    i64  size()    => this.map.size()
+    bool isEmpty() => this.map.isEmpty()
+
+    // ── Mutation ──────────────────────────────────────────────────────────────
+
+    // Add value to the set.
+    // Returns true when newly inserted, false when already present.
+    bool add(T value)
+    {
+        return match (this.map.put(value, true))
+        {
+            PutResult.Inserted    => true,
+            PutResult.Updated(_)  => false
+        };
+    }
+
+    // Remove value from the set.
+    // Returns true when found and removed, false when absent.
+    bool remove(keeps T value)
+    {
+        return match (this.map.remove(value))
+        {
+            RemoveResult.Removed(_) => true,
+            RemoveResult.Missing    => false
+        };
+    }
+
+    // Remove all elements.
+    void clear() => this.map.clear()
+
+    // ── Query ─────────────────────────────────────────────────────────────────
+
+    bool contains(keeps T value) => this.map.containsKey(value)
+
+    // ── Set algebra ───────────────────────────────────────────────────────────
+
+    // Return a new set that is the union of this and other.
+    HashSet<T> mergeWith(keeps HashSet<T> other)
+    {
+        var merged = this.map.merge(other.map);
+        (map: merged,)
+    }
+
+    // ── Operators ─────────────────────────────────────────────────────────────
+
+    HashSet<T> operator+(keeps HashSet<T> other) => this.mergeWith(other)
+
+    bool operator==(keeps HashSet<T> other) => this.map == other.map
+    bool operator!=(keeps HashSet<T> other) => !(this == other)
+}

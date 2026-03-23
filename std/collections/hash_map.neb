@@ -1,0 +1,267 @@
+namespace std::collections;
+
+// =============================================================================
+// std::collections::HashMap<K: Hashable, V> — open-addressing hash table
+// =============================================================================
+//
+// Stores (key, value) pairs.  Uses linear probing for collision resolution.
+// Load factor is capped at 0.75; the table doubles on overflow.
+//
+// Complexity (average)
+//   get / containsKey  O(1)
+//   put / remove       O(1) amortised
+//
+// CVT notes
+// ─────────
+// Each bucket slot is a triple of pointer-sized words: (state, key, value).
+// "state" encodes: 0 = empty, 1 = occupied, 2 = tombstone (deleted).
+// The backing buffer is managed through the raw allocator FFI.
+//
+// Usage
+// ─────
+//   var scores = HashMap<str, i64>();
+//   scores.put("Alice", 42);
+//   scores.put("Bob", 17);
+//   i64? s = scores.get("Alice");  // Found(42)
+//   scores.remove("Bob");
+
+// ── Slot state constants (stored as the first word of each triple) ─────────────
+
+const i64 SLOT_EMPTY     = 0;
+const i64 SLOT_OCCUPIED  = 1;
+const i64 SLOT_TOMBSTONE = 2;
+
+// ── Words per slot: [ state | key | value ] ───────────────────────────────────
+
+const i64 WORDS_PER_SLOT = 3;
+
+// =============================================================================
+// Type definition
+// =============================================================================
+
+type HashMap<K: Hashable, V>
+{
+    private Ref buckets;      // flat word array: WORDS_PER_SLOT words per bucket
+    private i64 bucketCount;  // total bucket slots allocated
+    private i64 count;        // live (occupied) entries
+    private i64 threshold;    // rehash trigger: (bucketCount * 3) / 4
+}
+
+// =============================================================================
+// Implementation
+// =============================================================================
+
+impl HashMap<K: Hashable, V>
+{
+    // ── Construction ──────────────────────────────────────────────────────────
+
+    HashMap<K, V> new()
+    {
+        const i64 initial  = 16;
+        i64 words          = initial * 3;
+        Ref buf            = neb_alloc(words * neb_sizeof_ptr());
+        neb_memset(buf, 0, words * neb_sizeof_ptr());
+        return (
+            buckets:     buf,
+            bucketCount: initial,
+            count:       0,
+            threshold:   (initial * 3) / 4
+        );
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    // Compute the starting bucket index for a key.
+    private i64 startIndex(keeps K key)
+    {
+        i64 h = (i64)(Ref)key;
+        if (h < 0) { h = -h; }
+        return h % this.bucketCount;
+    }
+
+    // Read the state word for slot i.
+    private i64 slotState(i64 i)
+    {
+        return (i64)neb_ptr_load(this.buckets, i * 3);
+    }
+
+    // Read the key reference for slot i.
+    private K slotKey(i64 i)
+    {
+        return (K)neb_ptr_load(this.buckets, i * 3 + 1);
+    }
+
+    // Read the value reference for slot i.
+    private V slotValue(i64 i)
+    {
+        return (V)neb_ptr_load(this.buckets, i * 3 + 2);
+    }
+
+    // Write a full slot triple.
+    private void writeSlot(i64 i, i64 state, K key, V value)
+    {
+        neb_ptr_store(this.buckets, i * 3,     (Ref)state);
+        neb_ptr_store(this.buckets, i * 3 + 1, (Ref)key);
+        neb_ptr_store(this.buckets, i * 3 + 2, (Ref)value);
+    }
+
+    // Linear probe: find the slot for key, returning its index.
+    // Returns none when not found.
+    private i64? findSlot(keeps K key)
+    {
+        i64 start = this.startIndex(key);
+        for (i < this.bucketCount)
+        {
+            i64 idx   = (start + i) % this.bucketCount;
+            i64 state = this.slotState(idx);
+
+            if (state == 0) return none;
+            if (state == 1 && (Ref)this.slotKey(idx) == (Ref)key) return idx;
+            // SLOT_TOMBSTONE: keep probing
+        }
+        return none;
+    }
+
+    // Grow the table by doubling and rehashing all live entries.
+    private void rehash()
+    {
+        i64 oldCount   = this.bucketCount;
+        Ref oldBuckets = this.buckets;
+
+        i64 newCount   = oldCount * 2;
+        i64 words      = newCount * 3;
+        Ref newBuf     = neb_alloc(words * neb_sizeof_ptr());
+        neb_memset(newBuf, 0, words * neb_sizeof_ptr());
+
+        this.buckets     = newBuf;
+        this.bucketCount = newCount;
+        this.threshold   = (newCount * 3) / 4;
+        this.count       = 0;
+
+        // Re-insert all live entries into the new table.
+        for (i < oldCount)
+        {
+            if ((i64)neb_ptr_load(oldBuckets, i * 3) == 1)
+            {
+                K k = (K)neb_ptr_load(oldBuckets, i * 3 + 1);
+                V v = (V)neb_ptr_load(oldBuckets, i * 3 + 2);
+                this.put(k, v);
+            }
+        }
+    }
+
+    // ── Size ─────────────────────────────────────────────────────────────────
+
+    i64  size()    => this.count
+    bool isEmpty() => this.count == 0
+
+    // ── Read ──────────────────────────────────────────────────────────────────
+
+    bool containsKey(keeps K key) => this.findSlot(key) != none
+
+    // Returns the value for key, or none if not present.
+    V? get(keeps K key)
+    {
+        i64? idx = this.findSlot(key);
+        if (idx == none) return none;
+        return this.slotValue(idx!);
+    }
+
+    // ── Mutation ──────────────────────────────────────────────────────────────
+
+    // Insert or update key.  Returns Inserted or Updated(previousValue).
+    PutResult<V> put(K key, V value)
+    {
+        if (this.count >= this.threshold) { this.rehash(); }
+
+        i64 start = this.startIndex(key);
+        i64 firstTombstone = -1;
+
+        for (i < this.bucketCount)
+        {
+            i64 idx   = (start + i) % this.bucketCount;
+            i64 state = this.slotState(idx);
+
+            if (state == 0)
+            {
+                // Use tombstone slot if we passed one, otherwise the empty slot.
+                i64 target = if (firstTombstone >= 0) { firstTombstone } else { idx };
+                this.writeSlot(target, 1, key, value);
+                this.count += 1;
+                return PutResult.Inserted;
+            }
+
+            if (state == 2 && firstTombstone < 0)
+            {
+                firstTombstone = idx;
+                continue;
+            }
+
+            if (state == 1 && (Ref)this.slotKey(idx) == (Ref)key)
+            {
+                V prev = this.slotValue(idx);
+                this.writeSlot(idx, 1, key, value);
+                return PutResult.Updated(prev);
+            }
+        }
+
+        // Table is full (shouldn't happen if threshold is set correctly).
+        this.rehash();
+        return this.put(key, value);
+    }
+
+    // Remove key.  Returns Removed(value) or Missing.
+    RemoveResult<V> remove(keeps K key)
+    {
+        i64? idx = this.findSlot(key);
+        if (idx == none) return RemoveResult.Missing;
+
+        V removed = this.slotValue(idx!);
+        // Mark as tombstone so probing chains remain intact.
+        neb_ptr_store(this.buckets, idx! * 3, (Ref)2);
+        this.count -= 1;
+        return RemoveResult.Removed(removed);
+    }
+
+    // Remove all entries.
+    void clear()
+    {
+        neb_memset(this.buckets, 0, this.bucketCount * 3 * neb_sizeof_ptr());
+        this.count = 0;
+    }
+
+    // ── Bulk operations ───────────────────────────────────────────────────────
+
+    // Return a new map containing all entries from this, then all from other.
+    // On key collision, other's value wins.
+    HashMap<K, V> merge(keeps HashMap<K, V> other)
+    {
+        var result = HashMap<K, V>.new();
+
+        for (i < this.bucketCount)
+        {
+            if (this.slotState(i) == 1)
+            {
+                result.put(this.slotKey(i), this.slotValue(i));
+            }
+        }
+        for (i < other.bucketCount)
+        {
+            if (other.slotState(i) == 1)
+            {
+                result.put(other.slotKey(i), other.slotValue(i));
+            }
+        }
+
+        return result;
+    }
+
+    // ── Operators ─────────────────────────────────────────────────────────────
+
+    V? operator[](K key)               => this.get(key)
+    void operator[]=(K key, V value)   => this.put(key, value)
+    HashMap<K, V> operator+(keeps HashMap<K, V> other) => this.merge(other)
+
+    bool operator==(keeps HashMap<K, V> other) => this.count == other.size()
+    bool operator!=(keeps HashMap<K, V> other) => !(this == other)
+}

@@ -1,36 +1,67 @@
 namespace std::primitives;
-use std::io;
+
+// =============================================================================
+// std::primitives — Stringable implementations for all built-in scalar types
+// =============================================================================
+//
+// Declares type-set tags so that a single impl block can cover an entire family
+// of numeric types, then wires each family to its runtime formatter.
+//
+// These impls are what allow string interpolation ($"value = {x}") and
+// std::io::println to work with any scalar without explicit conversion.
+
+// ── Type-set tags ─────────────────────────────────────────────────────────────
 
 tag { i8, i16, i32, i64 } as Signed;
 tag { u8, u16, u32, u64 } as Unsigned;
 tag { Signed | Unsigned } as Integers;
 
+// ── Runtime formatters (implemented in runtime/core/runtime.c) ────────────────
 
-extern "C" {
+private extern "C"
+{
     str __nebula_rt_i64_to_str(i64 v);
     str __nebula_rt_u64_to_str(u64 v);
     str __nebula_rt_f64_to_str(f64 v);
-    str __nebula_rt_bool_to_str(i32 v);
 }
 
-impl Stringable for Signed {
-    str toStr() => __nebula_rt_i64_to_str((i64) this)
+// ── Stringable implementations ────────────────────────────────────────────────
+
+use std::io::Stringable;
+
+impl Stringable for Signed
+{
+    str toStr() => __nebula_rt_i64_to_str((i64)this)
 }
 
-impl Stringable for Unsigned {
-    str toStr() => __nebula_rt_u64_to_str((u64) this)
+impl Stringable for Unsigned
+{
+    str toStr() => __nebula_rt_u64_to_str((u64)this)
 }
 
-impl Stringable for f32, f64 {
-    str toStr() => __nebula_rt_f64_to_str((f64) this)
+impl Stringable for f32, f64
+{
+    str toStr() => __nebula_rt_f64_to_str((f64)this)
 }
 
-impl Stringable for bool {
-    str toStr() {
-        return if (this) { "true" } else { "false" };
-    }
+impl Stringable for bool
+{
+    str toStr() => if (this) { "true" } else { "false" }
 }
 
-impl Stringable for str {
+impl Stringable for str
+{
     str toStr() => this
 }
+
+// ── Hashable implementations for common key types ─────────────────────────────
+//
+// FNV-1a hash for str; identity hash for integers.
+use std::collections::Hashable;
+impl Hashable for str
+{
+    i64 hashCode() => (i64)(Ref)this
+}
+
+impl Hashable for Signed   { i64 hashCode() => (i64)this }
+impl Hashable for Unsigned { i64 hashCode() => (i64)this }

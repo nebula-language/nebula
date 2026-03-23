@@ -1,0 +1,182 @@
+namespace std::collections;
+
+// =============================================================================
+// std::collections::ArrayList<T> — heap-backed resizable array
+// =============================================================================
+//
+// A dynamic array that doubles capacity on overflow.
+//
+// Complexity
+//   add        O(1) amortised
+//   get / set  O(1)
+//   removeAt   O(n)  — shifts trailing elements
+//   indexOf    O(n)
+//
+// CVT notes
+// ─────────
+// The backing buffer is managed through the raw allocator FFI.
+// ArrayList<T> is a value type (type, not box). Its fields are a Ref to
+// heap memory, a count, and a capacity — all plain integers or Refs.
+// The Ref is tracked by CVT; it is freed when the ArrayList goes out of scope.
+//
+// Usage
+// ─────
+//   var names = ArrayList<str>();
+//   names.add("Alice");
+//   names.add("Bob");
+//   for (i < names.size()) { println(names[i]); }
+
+// =============================================================================
+// Type definition
+// =============================================================================
+
+type ArrayList<T>
+{
+    private Ref data;       // pointer-array backing buffer
+    private i64 count;      // live elements
+    private i64 capacity;   // allocated slots
+}
+
+// =============================================================================
+// Implementation
+// =============================================================================
+
+impl ArrayList<T>
+{
+    // ── Construction ──────────────────────────────────────────────────────────
+
+    ArrayList<T> new()
+    {
+        const i64 initial = 8;
+        return (
+            data:     neb_alloc(initial * neb_sizeof_ptr()),
+            count:    0,
+            capacity: initial
+        );
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    private void grow()
+    {
+        i64 newCap  = this.capacity * 2;
+        this.data    = neb_realloc(this.data, newCap * neb_sizeof_ptr());
+        this.capacity = newCap;
+    }
+
+    private bool inBounds(i64 index) => index >= 0 && index < this.count
+
+    // ── Size ─────────────────────────────────────────────────────────────────
+
+    i64  size()    => this.count
+    bool isEmpty() => this.count == 0
+
+    // ── Mutation ──────────────────────────────────────────────────────────────
+
+    // Append an element.  Grows the backing buffer if needed.
+    void add(T element)
+    {
+        if (this.count == this.capacity) { this.grow(); }
+        neb_ptr_store(this.data, this.count, (Ref)element);
+        this.count += 1;
+    }
+
+    // Replace the element at index.  No-op when out of bounds.
+    void set(i64 index, T value)
+    {
+        if (this.inBounds(index))
+        {
+            neb_ptr_store(this.data, index, (Ref)value);
+        }
+    }
+
+    // Remove and return the element at index, shifting everything after it left.
+    // Returns none when out of bounds.
+    T? removeAt(i64 index)
+    {
+        if (!this.inBounds(index)) return none;
+
+        T removed = this[index];
+        i64 i = index + 1;
+        while (i < this.count)
+        {
+            neb_ptr_store(this.data, i - 1, neb_ptr_load(this.data, i));
+            i += 1;
+        }
+        this.count -= 1;
+        return removed;
+    }
+
+    // Remove all elements.  Does not release the backing buffer.
+    void clear() { this.count = 0; }
+
+    // ── Query ─────────────────────────────────────────────────────────────────
+
+    // Return the element at index, or none when out of bounds.
+    T? get(i64 index)
+    {
+        if (!this.inBounds(index)) return none;
+        return (T)neb_ptr_load(this.data, index);
+    }
+
+    // Linear search — returns the first index where element equals v, or none.
+    i64? indexOf(keeps T v)
+    {
+        i64 i = 0;
+        while (i < this.count)
+        {
+            if (neb_ptr_load(this.data, i) == (Ref)v) return i;
+            i += 1;
+        }
+        return none;
+    }
+
+    bool contains(keeps T v) => this.indexOf(v) != none
+
+    // ── Operators ─────────────────────────────────────────────────────────────
+
+    // Direct index read: list[i]  — panics when out of bounds.
+    T operator[](i64 index) => (T)neb_ptr_load(this.data, index)
+
+    // Direct index write: list[i] = v  — no-op when out of bounds.
+    void operator[]=(i64 index, T value)
+    {
+        if (this.inBounds(index))
+        {
+            neb_ptr_store(this.data, index, (Ref)value);
+        }
+    }
+
+    // Append-and-return a new list containing elements of this followed by other.
+    ArrayList<T> operator+(keeps ArrayList<T> other)
+    {
+        var result = ArrayList<T>.new();
+        i64 i = 0;
+        while (i < this.count)
+        {
+            result.add((T)neb_ptr_load(this.data, i));
+            i += 1;
+        }
+        i = 0;
+        while (i < other.size())
+        {
+            result.add((T)neb_ptr_load(other.data, i));
+            i += 1;
+        }
+        return result;
+    }
+
+    bool operator==(keeps ArrayList<T> other)
+    {
+        if (this.count != other.size()) return false;
+        i64 i = 0;
+        while (i < this.count)
+        {
+            if (neb_ptr_load(this.data, i) != neb_ptr_load(other.data, i)) return false;
+            i += 1;
+        }
+        return true;
+    }
+
+    bool operator!=(keeps ArrayList<T> other) => !(this == other)
+}

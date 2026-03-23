@@ -1,55 +1,44 @@
 namespace std::collections;
 
 // =============================================================================
-// std::collections::traits — core collection trait definitions
+// std::collections::traits — core collection contracts
 // =============================================================================
-//
-// Traits here define the contracts that collection types must satisfy.
-// They are intentionally minimal: each trait carries only the methods that
-// belong strictly to its responsibility, keeping implementors focused.
 
 // -----------------------------------------------------------------------------
-// Hashable — anything that can produce a deterministic hash code
+// Hashable — anything that can produce a deterministic hash code.
+// Equal values must always produce equal hash codes.
 // -----------------------------------------------------------------------------
 
 trait Hashable
 {
-    // Returns a hash code for this value.  Equal values must return equal hashes.
     i64 hashCode();
 }
 
 // -----------------------------------------------------------------------------
-// Equatable — value equality (distinct from identity)
+// Equatable — structural value equality (distinct from reference identity).
 // -----------------------------------------------------------------------------
 
 trait Equatable
 {
-    // Returns true when this value is structurally equal to `other`.
-    bool equals(Ref other);
+    bool equals(Equatable other);
 }
 
 // -----------------------------------------------------------------------------
-// Collection — read-only view common to all collection types
+// Collection — the minimal read-only contract shared by all collections.
 // -----------------------------------------------------------------------------
 
 trait Collection
 {
-    // Number of elements currently stored.
-    i64 size();
-
-    // True when size() == 0.
-    bool isEmpty();
-
-    // Remove all elements, resetting the collection to an empty state.
+    i64  size();
+    bool isEmpty() => this.size() == 0
     void clear();
 }
 
 // -----------------------------------------------------------------------------
-// Indexable — random access by integer position
+// Indexable — integer-indexed random access.
 // -----------------------------------------------------------------------------
 
 trait Indexable
 {
-    // Number of elements accessible via [].
     i64 size();
 }

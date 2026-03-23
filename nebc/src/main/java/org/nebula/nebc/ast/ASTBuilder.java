@@ -1012,6 +1012,24 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 
 		if (ctx.literal() != null)
 			return visit(ctx.literal());
+		// Generic type reference in expression context: ArrayList<T>.new(), HashMap<K,V>.new()
+		// The type arguments are already in scope (T, K, V are TypeParameterTypes from the
+		// enclosing impl block), so we emit a plain IdentifierExpression for the base name.
+		// Explicit generic type args provided at the call site (e.g. HashMap<str, i64>.new())
+		// are recorded as raw text on the node so the semantic analyzer can use them for
+		// specialisation when inferring the result type of .new().
+		if (ctx.type_argument_list() != null)
+		{
+			String baseName = ctx.IDENTIFIER() != null
+					? ctx.IDENTIFIER().getText()
+					: ctx.qualified_name().getText();
+			String typeArgText = ctx.type_argument_list().getText(); // e.g. "<T,bool>"
+			// Strip the surrounding < > to get the raw args string
+			String rawArgs = typeArgText.length() >= 2
+					? typeArgText.substring(1, typeArgText.length() - 1)
+					: "";
+			return new IdentifierExpression(span, baseName, rawArgs);
+		}
 		if (ctx.IDENTIFIER() != null)
 			return new IdentifierExpression(span, ctx.IDENTIFIER().getText());
 		if (ctx.qualified_name() != null)
@@ -1162,19 +1180,18 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 	{
 		SourceSpan span = SourceUtil.createSpan(ctx, currentFileName);
 		if (ctx.INTEGER_LITERAL() != null)
-			return new LiteralExpression(span, Long.parseLong(ctx.INTEGER_LITERAL().getText()), LiteralType.INT);
+			return new LiteralExpression(span, parseIntegerLiteralText(ctx.INTEGER_LITERAL().getText(), 10), LiteralType.INT);
 		if (ctx.HEX_INTEGER_LITERAL() != null)
 		{
 			String text = ctx.HEX_INTEGER_LITERAL().getText();
-			// Strip trailing type suffix (e.g. i32, u64) if present
-			String digits = text.replaceAll("[iIuU].*$", "");
-			return new LiteralExpression(span, Long.parseUnsignedLong(digits.substring(2), 16), LiteralType.INT);
+			String digits = text.substring(2); // strip 0x
+			return new LiteralExpression(span, parseIntegerLiteralText(digits, 16), LiteralType.INT);
 		}
 		if (ctx.BIN_INTEGER_LITERAL() != null)
 		{
 			String text = ctx.BIN_INTEGER_LITERAL().getText();
-			String digits = text.replaceAll("[iIuU].*$", "");
-			return new LiteralExpression(span, Long.parseUnsignedLong(digits.substring(2), 2), LiteralType.INT);
+			String digits = text.substring(2); // strip 0b
+			return new LiteralExpression(span, parseIntegerLiteralText(digits, 2), LiteralType.INT);
 		}
 		if (ctx.REAL_LITERAL() != null)
 		{
@@ -1672,6 +1689,47 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			params.add(new GenericParam(paramName, bound));
 		}
 		return params;
+	}
+
+	private long parseIntegerLiteralText(String text, int radix)
+	{
+		// Accept underscores and optional integer suffixes: i8/i16/i32/i64/u8/u16/u32/u64
+		String cleaned = text.replace("_", "");
+		String suffix = "";
+		int suffixStart = -1;
+		for (int i = 0; i < cleaned.length(); i++)
+		{
+			char c = cleaned.charAt(i);
+			if (c == 'i' || c == 'I' || c == 'u' || c == 'U')
+			{
+				suffixStart = i;
+				break;
+			}
+		}
+		if (suffixStart >= 0)
+		{
+			suffix = cleaned.substring(suffixStart);
+			cleaned = cleaned.substring(0, suffixStart);
+		}
+
+		// Empty after stripping => invalid literal text; let Long parse throw.
+		boolean unsigned = !suffix.isEmpty() && (suffix.charAt(0) == 'u' || suffix.charAt(0) == 'U');
+
+		try
+		{
+			if (unsigned)
+			{
+				// Parse full 64-bit unsigned range and keep raw two's-complement bits in long.
+				return Long.parseUnsignedLong(cleaned, radix);
+			}
+			return Long.parseLong(cleaned, radix);
+		}
+		catch (NumberFormatException ex)
+		{
+			// Fallback for unsuffixed integer literals that exceed signed i64 but fit u64.
+			// This prevents compiler crashes and preserves the literal bit pattern.
+			return Long.parseUnsignedLong(cleaned, radix);
+		}
 	}
 
 	private Modifier mapVisibility(NebulaParser.Visibility_modifierContext ctx)

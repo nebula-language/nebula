@@ -1,0 +1,36 @@
+namespace std::collections;
+
+// =============================================================================
+// std::collections::entry — result types for collection mutation operations
+// =============================================================================
+//
+// These tagged unions encode operation outcomes so that callers are forced
+// by the type checker to handle every branch instead of ignoring silent
+// sentinel returns.
+
+// ── HashMap.put() ─────────────────────────────────────────────────────────────
+// Inserted   : key was absent; the new value was stored.
+// Updated(v) : key was already present; v is the previous value.
+tagged union PutResult<V>
+{
+    Inserted,
+    Updated(V previous)
+}
+
+// ── HashMap.remove() / HashSet.remove() ───────────────────────────────────────
+// Removed(v) : key was present and its value v was removed.
+// Missing    : key was not present; the collection is unchanged.
+tagged union RemoveResult<V>
+{
+    Removed(V value),
+    Missing
+}
+
+// ── Fallible index lookups ─────────────────────────────────────────────────────
+// Found(v) : the element exists.
+// NotFound : it does not.
+tagged union LookupResult<V>
+{
+    Found(V value),
+    NotFound
+}

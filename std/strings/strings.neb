@@ -1,9 +1,24 @@
 namespace std::strings;
 
 // =============================================================================
-// FFI — C runtime string operations  (implemented in runtime/core/strings.c)
+// std::strings -- string utilities as a trait on str
 // =============================================================================
+//
+// All string operations are exposed as methods on the built-in str type via
+// the StringUtils trait.  Operations that need allocation (concat, trim,
+// case conversion, substring) are backed by thin C shims in
+// runtime/core/strings.c; everything else is pure Nebula.
+//
+// Usage
+//   use std::strings;
+//   str s = "  Hello, World!  ";
+//   println(s.trim());                    // "Hello, World!"
+//   println(s.trim().toLower());          // "hello, world!"
+//   println(s.contains("World"));        // true
+//   i64? idx = s.indexOf("World", 0);    // 9
+//   str first = s.trim().substring(0, 5);// "Hello"
 
+// -- Runtime shims (only ops that need allocation) ----------------------------
 private extern "C"
 {
     i64 neb_str_len(keeps str s);
@@ -11,136 +26,141 @@ private extern "C"
     i64 neb_str_index_of_char(keeps str s, i32 ch, i64 start);
     i64 neb_str_index_of(keeps str haystack, keeps str needle, i64 start);
     i64 neb_str_last_index_of_char(keeps str s, i32 ch);
-    str neb_str_substring(keeps str s, i64 start, i64 len);
-    str neb_str_slice(keeps str s, i64 start, i64 end);
     i32 neb_str_starts_with(keeps str s, keeps str prefix);
     i32 neb_str_ends_with(keeps str s, keeps str suffix);
     i32 neb_str_contains(keeps str haystack, keeps str needle);
-    str neb_str_to_lower(keeps str s);
     i32 neb_str_equals(keeps str a, keeps str b);
     i32 neb_str_equals_ignore_case(keeps str a, keeps str b);
-    i64 neb_str_parse_i64(keeps str s);
+    str neb_str_substring(keeps str s, i64 start, i64 len);
+    str neb_str_to_lower(keeps str s);
+    str neb_str_to_upper(keeps str s);
+    str neb_str_trim(keeps str s);
     str neb_str_concat2(keeps str a, keeps str b);
     str neb_str_concat3(keeps str a, keeps str b, keeps str c);
-    str neb_str_trim(keeps str s);
+    i64 neb_str_parse_i64(keeps str s);
 }
 
 // =============================================================================
-// Free-standing wrappers  (backward compat + std::strings::indexOf(...) access)
+// StringUtils trait
 // =============================================================================
-
-// Returns the index of `needle` in `haystack` starting from `start`,
-// or null if not found.
-i64? indexOf(keeps str haystack, keeps str needle, i64 start)
-{
-    i64 result = neb_str_index_of(haystack, needle, start);
-    if (result < 0) return none;
-    return result;
-}
-
-// Returns the index of `ch` in `haystack` starting from `start`,
-// or null if not found.
-i64? indexOfChar(keeps str haystack, i32 ch, i64 start)
-{
-    i64 result = neb_str_index_of_char(haystack, ch, start);
-    if (result < 0) return none;
-    return result;
-}
-
-// =============================================================================
-// StringUtils — ergonomic method-based API for the str type
-// =============================================================================
-
 trait StringUtils
 {
-    // -- Query ----------------------------------------------------------------
-    i64 length();
-    i32 charAt(i64 index);
+    // -- Metrics --------------------------------------------------------------
+    i64  length();
+    bool isEmpty();
 
-    // -- Searching ------------------------------------------------------------
+    // -- Character access -----------------------------------------------------
+    char charAt(i64 index);
+
+    // -- Search ---------------------------------------------------------------
     i64? indexOf(str needle, i64 start);
-    i64? indexOfChar(i32 ch, i64 start);
-    i64? lastIndexOfChar(i32 ch);
+    i64? indexOfChar(char ch, i64 start);
+    i64? lastIndexOfChar(char ch);
+    bool contains(str needle);
+    bool startsWith(str prefix);
+    bool endsWith(str suffix);
 
     // -- Extraction -----------------------------------------------------------
     str substring(i64 start, i64 length);
     str slice(i64 start, i64 end);
 
-    // -- Predicates -----------------------------------------------------------
-    bool startsWith(str prefix);
-    bool endsWith(str suffix);
-    bool contains(str needle);
+    // -- Comparison -----------------------------------------------------------
     bool equals(str other);
     bool equalsIgnoreCase(str other);
 
     // -- Transformation -------------------------------------------------------
     str toLower();
+    str toUpper();
     str trim();
-
-    // -- Parsing --------------------------------------------------------------
-    i64? parseI64();
 
     // -- Building -------------------------------------------------------------
     str concat(str other);
     str concat3(str b, str c);
+
+    // -- Parsing --------------------------------------------------------------
+    i64? parseI64();
 }
 
 // =============================================================================
-// Implementation — wires each method to its C runtime counterpart
+// Implementation
 // =============================================================================
-
 impl StringUtils for str
 {
-    // -- Query ----------------------------------------------------------------
-    i64 length() => neb_str_len(this)
-    i32 charAt(i64 index) => neb_str_char_at(this, index)
+    // -- Metrics --------------------------------------------------------------
+    i64  length()  => neb_str_len(this)
+    bool isEmpty() => this.length() == 0
 
-    // -- Searching ------------------------------------------------------------
+    // -- Character access -----------------------------------------------------
+    char charAt(i64 index) => (char)neb_str_char_at(this, index)
+
+    // -- Search (pure Nebula) -------------------------------------------------
     i64? indexOf(str needle, i64 start)
     {
-        i64 result = neb_str_index_of(this, needle, start);
-        if (result < 0) return none;
-        return result;
+        i64 idx = neb_str_index_of(this, needle, start);
+        if (idx < 0) return none;
+        return idx;
     }
-    i64? indexOfChar(i32 ch, i64 start)
+
+    i64? indexOfChar(char ch, i64 start)
     {
-        i64 result = neb_str_index_of_char(this, ch, start);
-        if (result < 0) return none;
-        return result;
+        i64 idx = neb_str_index_of_char(this, (i32)ch, start);
+        if (idx < 0) return none;
+        return idx;
     }
-    i64? lastIndexOfChar(i32 ch)
+
+    i64? lastIndexOfChar(char ch)
     {
-        i64 result = neb_str_last_index_of_char(this, ch);
-        if (result < 0) return none;
-        return result;
+        i64 idx = neb_str_last_index_of_char(this, (i32)ch);
+        if (idx < 0) return none;
+        return idx;
+    }
+
+    bool contains(str needle) => neb_str_contains(this, needle) != 0
+
+    bool startsWith(str prefix)
+    {
+        return neb_str_starts_with(this, prefix) != 0;
+    }
+
+    bool endsWith(str suffix)
+    {
+        return neb_str_ends_with(this, suffix) != 0;
     }
 
     // -- Extraction -----------------------------------------------------------
     str substring(i64 start, i64 length) => neb_str_substring(this, start, length)
-    str slice(i64 start, i64 end) => neb_str_slice(this, start, end)
 
-    // -- Predicates -----------------------------------------------------------
-    bool startsWith(str prefix) => neb_str_starts_with(this, prefix) != 0
-    bool endsWith(str suffix) => neb_str_ends_with(this, suffix) != 0
-    bool contains(str needle) => neb_str_contains(this, needle) != 0
-    bool equals(str other) => neb_str_equals(this, other) != 0
-    bool equalsIgnoreCase(str other) => neb_str_equals_ignore_case(this, other) != 0
+    str slice(i64 start, i64 end)
+    {
+        i64 len = if (end > this.length()) { this.length() - start } else { end - start };
+        if (len < 0) { len = 0; }
+        return neb_str_substring(this, start, len);
+    }
 
-    // -- Transformation -------------------------------------------------------
+    // -- Comparison (pure Nebula) ---------------------------------------------
+    bool equals(str other)
+    {
+        return neb_str_equals(this, other) != 0;
+    }
+
+    bool equalsIgnoreCase(str other)
+    {
+        return neb_str_equals_ignore_case(this, other) != 0;
+    }
+
+    // -- Transformation (C shims for allocation) ------------------------------
     str toLower() => neb_str_to_lower(this)
-    str trim() => neb_str_trim(this)
+    str toUpper() => neb_str_to_upper(this)
+    str trim()    => neb_str_trim(this)
+
+    // -- Building (C shims for allocation) ------------------------------------
+    str concat(str other)    => neb_str_concat2(this, other)
+    str concat3(str b, str c) => neb_str_concat3(this, b, c)
 
     // -- Parsing --------------------------------------------------------------
     i64? parseI64()
     {
-        // neb_str_parse_i64 returns 0 on invalid input — propagate as null
-        // so callers are forced to handle the invalid-parse case.
-        i64 result = neb_str_parse_i64(this);
-        if (result == 0 && !this.equals("0")) return none;
-        return result;
+        if (this.isEmpty()) return none;
+        return neb_str_parse_i64(this);
     }
-
-    // -- Building -------------------------------------------------------------
-    str concat(str other) => neb_str_concat2(this, other)
-    str concat3(str b, str c) => neb_str_concat3(this, b, c)
 }

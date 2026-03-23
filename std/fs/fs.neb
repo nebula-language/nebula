@@ -79,13 +79,13 @@ enum FsError
 // Result unions
 // =============================================================================
 
-union OpenResult
+tagged union OpenResult
 {
     Ok(File handle),
     Err(FsError reason)
 }
 
-union WriteResult
+tagged union WriteResult
 {
     Ok(i64 bytes),
     Err(FsError reason)
