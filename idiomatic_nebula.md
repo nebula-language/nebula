@@ -349,23 +349,31 @@ void processHeap()
     box List<str> data = box List<str>();
     data.add("Hello");
     println(data[0]);
-    // ← free(data) injected here
+    // ← free(data) injected here (end of scope of last reference)
 }
 ```
+The important aclarations:
+- The free frees the backing region (the actual memory) not the view. Views are all stack allocated and "self-destroyed" at the end of their local scope.
+- A region is only considered for freeing when no more views use it.
+- All views have simultaneous mutability to the region.
+- The only condition that constraints a region's validity is that its not dropped.
+- Nebula's CVT memory safety only aims for memory safety, not user safety. User do its thing.
+- The free is inserted at the end of the scope.
 
-## 13. The `keeps` / `drops` / `mutates` Contract
-Use parameter hints to explicitly communicate memory ownership at function call sites. This extends CVT causality through function boundaries and into FFI.
+## 13. The `keeps` / `drops` Contract
+Use parameter hints to explicitly communicate causality at function call sites. This helps the compiler extend CVT causality through function boundaries and into FFI.
+> Note: This is not required in normal Nebula code, as the compiler's CVT tracker will actually understand the causality itself. But its required in FFI extern headers, as CVT obviously cannot track external causality.
 
 | Hint | Meaning | After the call |
 | :--- | :--- | :--- |
 | `keeps` | "I'm just reading." | Caller's view stays **Valid**. |
 | `drops` | "I consume this." | Caller's view becomes **Invalid**. |
-| `mutates` | "I may change the data." | Caller's view stays **Valid** but mutation is noted. |
+
+In nebula functions, keeps is the default CVT hint for every parameter as the compiler will track causality anyways. But for FFI extern "X" declarations, every parameter defaults to drops as the worst-case-scenario, even if the actual FFI function doesnt really invalidate the region, this is to ensure proper annotation. 
 
 ```nebula
 void log(keeps Resource r)    { println(r.id); }
 void close(drops Resource r)  { println($"closing {r.id}"); }
-void bump(mutates Resource r) { r.id += 1; }
 
 void main()
 {
@@ -378,3 +386,8 @@ void main()
 ```
 
 > The default hint when calling **extern C** functions is `drops`—this forces you to annotate FFI boundaries explicitly, rather than silently letting C consume your memory.
+THIS IS **NOT** ownership annotations, it's more about causal lifetimes. And every annotation will be verified by the compiler, so no, you cannot lie to it:
+```nebula
+// void foo(drops i32 a) => println(a) Error: `drops` annotation doesnt match causality for `i32 a`, change to keeps or remove it.
+```
+ 
