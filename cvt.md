@@ -205,7 +205,6 @@ Since C code is opaque to the Nebula compiler, hints extend the Causal Chain int
 
 * **`keeps`**: The function reads the memory but does not claim it. The Region remains `Valid` after the call.
 * **`drops`**: The function consumes the memory. The Region transitions to `Invalid` in Nebula immediately after the call.
-* **`mutates`**: The function may alter the data. Used for concurrency analysis; the Region remains `Valid` but the mutation is recorded.
 
 > The **default** for `extern "C"` functions is `drops`. This forces explicit annotation at every FFI boundary rather than silently allowing C to consume Nebula memory.
 
