@@ -1,17 +1,104 @@
-This repository (Nebula) is the single project for all parts of the Nebula language. nebc/ is the compiler, written in Java. std/ is the standard library, written in Nebula itself, it has std/runtime/ which adds the minimum necessary to be able to compile natively into all platform (current development only targets linux for faster development) without libc dependency so the Nebula language is completely agnostic from the platform. 
+## Nebula Project – AI-Enforceable Development Guidelines
 
-Write modular, production-grade, escalable code, prioritizing well estructured solutions rather than quick hacky fixes / features. E.g.: structure repeating patterns / code into helper methods.
+### 1. Project Structure
 
-Use the Allman style for all languages, e.g.: Java, Nebula, etc.
+The repository (**Nebula**) MUST be treated as a single, unified project. Components are:
 
-Every time, before coding, read thoroughly these files ./cvt.md (Which defines the Nebula language core philosophy and paradigm) and ./spec/revised/full.neb which is a example of all of the Nebula language features, both semantically and syntactically. So you completely understand Neubla's intended direction and scope.
+* `nebc/` — Java compiler.
+* `std/` — Standard library, written in Nebula.
 
-When recompiling the nebc compiler, ensure you're in the correct path ./nebula/nebc/:
-  - For testing / verifying / iterating you can simply do `mvn compile` (as its faster) and then simply execute it with Java.
-  - The way to get the native image is with `mvn clean package native:compile`. That does generate a native binary at nebc/target/nebc. That's symlinked to `/usr/local/bin/nebc` so it'll be automatically updated in the path.
+  * `std/runtime/` MUST provide only the **minimum runtime necessary** for native compilation.
+  * Nebula MUST remain **platform-agnostic** (no `libc` dependencies).
+* Current development SHOULD target **Linux** for speed but design MUST remain cross-platform compatible.
 
-To compile the standard library (std/) with nebc, use these flags:
-`nebc --library std/ -o neb --nostdlib` or the appropiate respective `java ...` command if testing with the .jar image.
---nostdlib is essential to ensure that it doesnt try to link with itself, which will cause redefinition errors.
+---
 
-Finally, acknowledge that your gonna be using fish, so you have to live up to its quirks, mainly syntactical differences from regular sh / bash and the use of $status instead of $0. If needed use /bin/bash everytime, e.g.: prepending every command with it
+### 2. Coding Standards
+
+All code MUST adhere to the following:
+
+1. MUST be **modular, production-grade, and scalable**.
+2. MUST prioritize **well-structured solutions** over hacks or temporary fixes.
+3. SHOULD extract repeating patterns into **helper methods or reusable modules**.
+4. MUST avoid **duplicate logic** and tightly coupled code.
+5. MUST follow **Allman style** for all supported languages (Java, Nebula, etc.).
+
+---
+
+### 3. Pre-Coding Requirements
+
+Before writing any code:
+
+1. MUST read `./spec/Nebula_CVT_LUA_Specification.md` → Understand Nebula’s **core philosophy and paradigm**.
+2. MUST read `./spec/full.neb` → Understand **all language features** (syntax + semantics).
+3. MUST validate that your implementation aligns with Nebula’s **intended direction and philosophy**.
+
+**Failure to follow this step is not allowed.**
+
+---
+
+### 4. Compiler Workflow (`nebc/`)
+
+You MUST operate within:
+
+```bash
+cd ./nebula/nebc/
+```
+
+#### Fast iteration:
+
+```bash
+mvn compile
+```
+
+* MUST run using the Java runtime.
+
+#### Native binary build:
+
+```bash
+mvn clean package native:compile
+```
+
+* Output MUST be `nebc/target/nebc`.
+* MUST be symlinked to `/usr/local/bin/nebc`.
+* MUST update system path automatically.
+
+---
+
+### 5. Standard Library Compilation
+
+To compile `std/`:
+
+```bash
+nebc --library std/ -o neb --nostdlib
+```
+
+* `--nostdlib` MUST be used.
+* MUST prevent linking standard library with itself to avoid **redefinition errors**.
+* Equivalent Java `.jar` commands MAY be used for testing but MUST respect the same flags.
+
+---
+
+### 6. Shell Environment
+
+* Default shell is **fish**.
+
+  * MUST use `$status` instead of `$?`.
+  * MUST account for fish syntax differences.
+* If fish compatibility fails, prepend commands with bash:
+
+```bash
+/bin/bash -c "your command"
+```
+
+---
+
+### 7. Core AI Enforcement Rules
+
+* MUST ALWAYS **prioritize correctness, clarity, and maintainability**.
+* MUST NEVER implement **quick hacks** or temporary solutions.
+* MUST modularize and refactor repetitive code.
+* MUST follow **Allman style** in all languages.
+* MUST validate against `cvt.md` and `full.neb` before generating code.
+
+> **Violation of any of these rules MUST be corrected automatically before final output.**
