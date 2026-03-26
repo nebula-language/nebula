@@ -30,7 +30,7 @@ All code MUST adhere to the following:
 Before writing any code:
 
 1. MUST read `./spec/Nebula_CVT_LUA_Specification.md` → Understand Nebula’s **core philosophy and paradigm**.
-2. MUST read `./spec/full.neb` → Understand **all language features** (syntax + semantics).
+2. MUST read `./spec/nebula_full_proof.neb` → Understand **all language features** (syntax + semantics).
 3. MUST validate that your implementation aligns with Nebula’s **intended direction and philosophy**.
 
 **Failure to follow this step is not allowed.**
@@ -60,8 +60,7 @@ mvn clean package native:compile
 ```
 
 * Output MUST be `nebc/target/nebc`.
-* MUST be symlinked to `/usr/local/bin/nebc`.
-* MUST update system path automatically.
+* Output is symlinked to `~/.nebula/bin/nebc`.
 
 ---
 
