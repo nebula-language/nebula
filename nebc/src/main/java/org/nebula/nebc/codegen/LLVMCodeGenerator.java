@@ -6141,7 +6141,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			if (type instanceof CompositeType && node.typeName.contains("<"))
 			{
 				Type astDerived = resolveNewExprTypeName(node.typeName, currentSubstitution);
-				System.err.println("[DBG-NEW] typeName='" + node.typeName + "' origType=" + type.name() + " astDerived=" + (astDerived != null ? astDerived.name() : "null"));
+				// System.err.println("[DBG-NEW] typeName='" + node.typeName + "' origType=" + type.name() + " astDerived=" + (astDerived != null ? astDerived.name() : "null"));
 				if (astDerived instanceof CompositeType)
 					type = astDerived;
 			}
@@ -8075,7 +8075,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 			// 3. Evaluate the guard → i1
 			// 4. Branch to arm body if guard is true, else next arm
 			boolean hasGuard = arm.guard != null;
-			System.err.println("[DBG-GUARD] arm " + armIdx + " guard=" + arm.guard + " pat=" + pat.getClass().getSimpleName());
+			//System.err.println("[DBG-GUARD] arm " + armIdx + " guard=" + arm.guard + " pat=" + pat.getClass().getSimpleName());
 
 			// Set up bindings early (needed for guard and arm body)
 			Map<String, LLVMValueRef> prevNamedValues = null;
@@ -9222,7 +9222,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		if (typeArgs.stream().anyMatch(t -> t == Type.ANY))
 		{
 			String argNames = typeArgs.stream().map(Type::name).collect(java.util.stream.Collectors.joining(","));
-			System.err.println("[DBG] erased call has <any>: method=" + ms.getName() + " mangled=" + ms.getMangledName() + " typeArgs=[" + argNames + "]");
+			// System.err.println("[DBG] erased call has <any>: method=" + ms.getName() + " mangled=" + ms.getMangledName() + " typeArgs=[" + argNames + "]");
 		}
 
 		List<LLVMValueRef> callArgs = new ArrayList<>();
@@ -9785,7 +9785,7 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 					Type actual = analyzer.getType(argNodes.get(i - argOffset));
 					if (ms.getName() != null && ms.getName().endsWith("println"))
 					{
-						System.err.println("[DBG] erased infer println declared=" + tpt.name() + " actual=" + (actual == null ? "<null>" : actual.name()));
+						// System.err.println("[DBG] erased infer println declared=" + tpt.name() + " actual=" + (actual == null ? "<null>" : actual.name()));
 					}
 					if (actual != null)
 						resolved.put(tpt.name(), actual);

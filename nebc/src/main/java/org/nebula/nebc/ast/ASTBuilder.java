@@ -1308,10 +1308,12 @@ public class ASTBuilder extends NebulaParserBaseVisitor<ASTNode>
 			Pattern pat = (Pattern) visit(armCtx.pattern());
 			Expression guard = null;
 			Expression res;
+			/*
 			System.err.println("[DBG-AST] match_arm text='" + armCtx.getText()
 				+ "' IF()=" + armCtx.IF()
 				+ " expressionCount=" + armCtx.expression().size()
 				+ " patternText='" + armCtx.pattern().getText() + "'");
+			 */
 			if (armCtx.IF() != null)
 			{
 				guard = (Expression) visit(armCtx.expression(0));
