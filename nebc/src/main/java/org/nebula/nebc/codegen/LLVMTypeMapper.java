@@ -159,8 +159,12 @@ public final class LLVMTypeMapper
 
 	private static LLVMTypeRef mapComposite(LLVMContextRef ctx, CompositeType ct)
 	{
+		if (ct instanceof EnumType)
+		{
+			return LLVMInt32TypeInContext(ctx);
+		}
 		// For now, we always use pointers to structs for composite types in Nebula
-		LLVMTypeRef structType = getOrCreateStructType(ctx, ct);
+		getOrCreateStructType(ctx, ct);
 		return LLVMPointerTypeInContext(ctx, 0);
 	}
 
@@ -182,6 +186,11 @@ public final class LLVMTypeMapper
 
 	public static LLVMTypeRef getOrCreateStructType(LLVMContextRef ctx, Type type)
 	{
+		if (type instanceof EnumType)
+		{
+			return LLVMInt32TypeInContext(ctx);
+		}
+
 		if (type == PrimitiveType.STR)
 		{
 			if (structTypes.containsKey("str"))
@@ -222,9 +231,14 @@ public final class LLVMTypeMapper
 		for (int i = 0; i < fields.size(); i++)
 		{
 			Type fieldType = fields.get(i).getType();
+			// Enum fields are always stored as i32 discriminants.
+			if (fieldType instanceof EnumType)
+			{
+				fieldTypesArr[i] = LLVMInt32TypeInContext(ctx);
+			}
 			// Dynamic array fields (T[]) are stored as { ptr, i64 } so that
 			// the element count is kept alongside the data pointer.
-			if (fieldType instanceof ArrayType at && at.elementCount == 0)
+			else if (fieldType instanceof ArrayType at && at.elementCount == 0)
 			{
 				fieldTypesArr[i] = getDynArrayStructType(ctx);
 			}
@@ -238,7 +252,8 @@ public final class LLVMTypeMapper
 			else if (fieldType instanceof org.nebula.nebc.semantic.types.CompositeType fieldCt
 					&& !(fieldCt instanceof org.nebula.nebc.semantic.types.ClassType)
 					&& !(fieldCt instanceof org.nebula.nebc.semantic.types.TraitType)
-					&& !(fieldCt instanceof org.nebula.nebc.semantic.types.UnionType))
+					&& !(fieldCt instanceof org.nebula.nebc.semantic.types.UnionType)
+					&& !(fieldCt instanceof EnumType))
 			{
 				fieldTypesArr[i] = getOrCreateStructType(ctx, fieldCt);
 			}

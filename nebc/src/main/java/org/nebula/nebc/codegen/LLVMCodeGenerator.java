@@ -1633,6 +1633,104 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 		return sym != null ? sym.getType() : PrimitiveType.I32;
 	}
 
+	/**
+	 * Builds a compile-time constant initializer for a top-level const.
+	 * Supports literals, identifiers that reference previously-emitted global
+	 * constants, and struct instance literals (NewExpression) with constant fields.
+	 */
+	private LLVMValueRef tryBuildGlobalConstInitializer(Expression expr, Type targetType)
+	{
+		if (expr == null || targetType == null)
+			return null;
+
+		if (expr instanceof LiteralExpression)
+		{
+			LLVMValueRef lit = expr.accept(this);
+			return coerceConstantToType(lit, toLLVMType(targetType));
+		}
+
+		if (expr instanceof IdentifierExpression ie)
+		{
+			LLVMValueRef global = LLVMGetNamedGlobal(module, ie.name);
+			if (global != null && !global.isNull())
+			{
+				LLVMValueRef init = LLVMGetInitializer(global);
+				if (init != null && !init.isNull())
+				{
+					return coerceConstantToType(init, toLLVMType(targetType));
+				}
+			}
+			return null;
+		}
+
+		if (expr instanceof NewExpression ne && targetType instanceof StructType st)
+		{
+			CompositeType ct = st;
+			if (currentSubstitution != null)
+			{
+				Type subst = currentSubstitution.substitute(st);
+				if (subst instanceof CompositeType substCt)
+					ct = substCt;
+			}
+
+			LLVMTypeRef structLlvmType = LLVMTypeMapper.getOrCreateStructType(context, ct);
+			java.util.List<VariableSymbol> orderedFields = new java.util.ArrayList<>();
+			for (Symbol s : ct.getMemberScope().getSymbols().values())
+			{
+				if (s instanceof VariableSymbol vs && !vs.getName().equals("this"))
+					orderedFields.add(vs);
+			}
+
+			java.util.Map<String, Integer> fieldNameToIndex = new java.util.LinkedHashMap<>();
+			for (int i = 0; i < orderedFields.size(); i++)
+				fieldNameToIndex.put(orderedFields.get(i).getName(), i);
+
+			LLVMValueRef[] fieldConsts = new LLVMValueRef[orderedFields.size()];
+			for (int i = 0; i < orderedFields.size(); i++)
+			{
+				LLVMTypeRef fieldLlvmType = LLVMStructGetTypeAtIndex(structLlvmType, i);
+				fieldConsts[i] = LLVMConstNull(fieldLlvmType);
+			}
+
+			for (int i = 0; i < ne.arguments.size(); i++)
+			{
+				Expression argExpr = ne.arguments.get(i);
+				int fieldIdx;
+				Expression valueExpr;
+				if (argExpr instanceof org.nebula.nebc.ast.expressions.NamedArgumentExpression nae)
+				{
+					Integer idx = fieldNameToIndex.get(nae.name);
+					if (idx == null)
+						continue;
+					fieldIdx = idx;
+					valueExpr = nae.value;
+				}
+				else
+				{
+					fieldIdx = i;
+					valueExpr = argExpr;
+				}
+				if (fieldIdx >= orderedFields.size())
+					continue;
+
+				Type fieldType = orderedFields.get(fieldIdx).getType();
+				if (currentSubstitution != null)
+					fieldType = currentSubstitution.substitute(fieldType);
+
+				LLVMValueRef fieldConst = tryBuildGlobalConstInitializer(valueExpr, fieldType);
+				if (fieldConst == null)
+					return null;
+
+				LLVMTypeRef fieldLlvmType = LLVMStructGetTypeAtIndex(structLlvmType, fieldIdx);
+				fieldConsts[fieldIdx] = coerceConstantToType(fieldConst, fieldLlvmType);
+			}
+
+			return LLVMConstNamedStruct(structLlvmType, new PointerPointer<>(fieldConsts), fieldConsts.length);
+		}
+
+		return null;
+	}
+
 	@Override
 	public LLVMValueRef visitConstDeclaration(ConstDeclaration node)
 	{
@@ -1669,20 +1767,38 @@ public class LLVMCodeGenerator implements ASTVisitor<LLVMValueRef>
 				LLVMValueRef initVal = null;
 				if (decl.hasInitializer())
 				{
-					// For global consts the initializer must be a constant expression.
-					// Visiting a LiteralExpression in codegen always returns an LLVM constant.
-					initVal = decl.initializer().accept(this);
-
-					// Coerce the constant initializer to the declared global type.
-					// Integer literals whose value exceeds Integer.MAX_VALUE are inferred
-					// as i64 by the semantic analyser (e.g. 0xFFFFFFFF → i64), but the
-					// declared type may be u32 / i32, so we must truncate the constant.
+					// For global consts, initializer lowering must stay in the constant domain
+					// (no allocas/instructions; there may be no current function).
+					initVal = tryBuildGlobalConstInitializer(decl.initializer(), type);
+					if (initVal == null)
+					{
+						throw new CodegenException("Global const initializer for '" + varName
+							+ "' is not a compile-time constant for type " + type.name());
+					}
 					initVal = coerceConstantToType(initVal, llvmType);
 				}
 
 				if (initVal == null)
 				{
 					initVal = LLVMGetUndef(llvmType);
+				}
+
+				// Composite constants are represented as pointer-like values in Nebula's
+				// current ABI. If we built an aggregate struct constant, place it in a
+				// private backing global and initialize the public const with its address.
+				if (LLVMGetTypeKind(llvmType) == LLVMPointerTypeKind
+						&& LLVMGetTypeKind(LLVMTypeOf(initVal)) == LLVMStructTypeKind)
+				{
+					String backingName = "__const_backing_" + varName;
+					LLVMValueRef backing = LLVMGetNamedGlobal(module, backingName);
+					if (backing == null || backing.isNull())
+					{
+						backing = LLVMAddGlobal(module, LLVMTypeOf(initVal), backingName);
+					}
+					LLVMSetInitializer(backing, initVal);
+					LLVMSetGlobalConstant(backing, 1);
+					LLVMSetLinkage(backing, LLVMPrivateLinkage);
+					initVal = backing;
 				}
 
 				LLVMSetInitializer(globalVar, initVal);
