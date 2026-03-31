@@ -91,6 +91,14 @@ public class Desugarer implements ASTVisitor<ASTNode>
 	}
 
 	@Override
+	public ASTNode visitTupleDestructuringDeclaration(org.nebula.nebc.ast.declarations.TupleDestructuringDeclaration node)
+	{
+		Expression init = (Expression) node.initializer.accept(this);
+		return new org.nebula.nebc.ast.declarations.TupleDestructuringDeclaration(
+			node.getSpan(), node.bindings, init, node.isVar);
+	}
+
+	@Override
 	public ASTNode visitConstDeclaration(ConstDeclaration node)
 	{
 		VariableDeclaration vd = (VariableDeclaration) node.declaration.accept(this);
@@ -290,6 +298,8 @@ public class Desugarer implements ASTVisitor<ASTNode>
 	{
 		Expression iterable = (Expression) node.iterable.accept(this);
 		Statement body = (Statement) node.body.accept(this);
+		if (node.tupleBindings != null)
+			return new ForeachStatement(node.getSpan(), node.tupleBindings, iterable, body);
 		return new ForeachStatement(node.getSpan(), node.variableType, node.variableName, iterable, body);
 	}
 
@@ -417,14 +427,17 @@ public class Desugarer implements ASTVisitor<ASTNode>
 				args.add((Expression) arg.accept(this));
 			}
 		}
-		return new InvocationExpression(node.getSpan(), target, args);
+		InvocationExpression result = new InvocationExpression(node.getSpan(), target, args);
+		result.rawTypeArgText = node.rawTypeArgText;
+		if (node.getTypeArguments() != null) result.setTypeArguments(node.getTypeArguments());
+		return result;
 	}
 
 	@Override
 	public ASTNode visitMemberAccessExpression(MemberAccessExpression node)
 	{
 		Expression target = (Expression) node.target.accept(this);
-		return new MemberAccessExpression(node.getSpan(), target, node.memberName);
+		return new MemberAccessExpression(node.getSpan(), target, node.memberName, node.isSafe);
 	}
 
 	@Override
@@ -509,8 +522,9 @@ public class Desugarer implements ASTVisitor<ASTNode>
 	public ASTNode visitMatchArm(MatchArm node)
 	{
 		Pattern p = (Pattern) node.pattern.accept(this);
+		Expression g = node.guard != null ? (Expression) node.guard.accept(this) : null;
 		Expression e = (Expression) node.result.accept(this);
-		return new MatchArm(node.getSpan(), p, e);
+		return new MatchArm(node.getSpan(), p, g, e);
 	}
 
 	@Override
@@ -575,6 +589,12 @@ public class Desugarer implements ASTVisitor<ASTNode>
 	// =========================================================================
 
 	@Override
+        public ASTNode visitLambdaExpression(org.nebula.nebc.ast.expressions.LambdaExpression node)
+        {
+                return node;
+        }
+
+        @Override
 	public ASTNode visitNoneExpression(org.nebula.nebc.ast.expressions.NoneExpression node)
 	{
 		return node;

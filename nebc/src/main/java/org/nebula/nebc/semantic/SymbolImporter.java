@@ -435,6 +435,18 @@ public class SymbolImporter
         Type           type = resolveType(obj.get("type").getAsString(), table);
         boolean        mut  = obj.get("mutable").getAsBoolean();
         VariableSymbol vs   = new VariableSymbol(name, type, mut, null);
+        if (obj.has("const_value"))
+        {
+            com.google.gson.JsonElement cv = obj.get("const_value");
+            if (cv.isJsonPrimitive())
+            {
+                com.google.gson.JsonPrimitive jp = cv.getAsJsonPrimitive();
+                if (jp.isNumber())
+                    vs.setConstValue(jp.getAsDouble());
+                else if (jp.isString())
+                    vs.setConstValue(jp.getAsString());
+            }
+        }
         if (obj.has("attributes"))
             vs.setAttributes(importAttributes(obj.getAsJsonArray("attributes")));
         return vs;

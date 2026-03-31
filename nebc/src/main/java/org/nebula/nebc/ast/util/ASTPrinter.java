@@ -146,6 +146,16 @@ public class ASTPrinter implements ASTVisitor<String>
 	}
 
 	@Override
+	public String visitTupleDestructuringDeclaration(org.nebula.nebc.ast.declarations.TupleDestructuringDeclaration node)
+	{
+		StringBuilder sb = new StringBuilder(line("TupleDestructuring"));
+		for (var b : node.bindings)
+			sb.append(line("  Binding: " + b.name()));
+		sb.append(visitNode("Init", node.initializer));
+		return sb.toString();
+	}
+
+	@Override
 	public String visitConstDeclaration(ConstDeclaration node)
 	{
 		return line("Const")
@@ -469,6 +479,12 @@ public class ASTPrinter implements ASTVisitor<String>
 	// =========================================================================
 
 	@Override
+        public String visitLambdaExpression(org.nebula.nebc.ast.expressions.LambdaExpression node)
+        {
+                return line("LambdaExpression");
+        }
+
+        @Override
 	public String visitNoneExpression(org.nebula.nebc.ast.expressions.NoneExpression node)
 	{
 		return line("NoneExpression");

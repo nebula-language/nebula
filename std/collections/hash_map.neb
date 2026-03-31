@@ -51,7 +51,7 @@ type HashMap<K: Hashable, V>
 // Implementation
 // =============================================================================
 
-impl HashMap<K: Hashable, V>
+impl HashMap<K, V>
 {
     // ── Construction ──────────────────────────────────────────────────────────
 
@@ -110,7 +110,7 @@ impl HashMap<K: Hashable, V>
     private i64? findSlot(keeps K key)
     {
         i64 start = this.startIndex(key);
-        for (i < this.bucketCount)
+        for (i64 i = 0; i < this.bucketCount; i++)
         {
             i64 idx   = (start + i) % this.bucketCount;
             i64 state = this.slotState(idx);
@@ -139,7 +139,7 @@ impl HashMap<K: Hashable, V>
         this.count       = 0;
 
         // Re-insert all live entries into the new table.
-        for (i < oldCount)
+        for (i64 i = 0; i < oldCount; i++)
         {
             if ((i64)neb_ptr_load(oldBuckets, i * 3) == 1)
             {
@@ -152,15 +152,15 @@ impl HashMap<K: Hashable, V>
 
     // ── Size ─────────────────────────────────────────────────────────────────
 
-    i64  size()    => this.count
-    bool isEmpty() => this.count == 0
+    pub i64  size()    => this.count
+    pub bool isEmpty() => this.count == 0
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
-    bool containsKey(keeps K key) => this.findSlot(key) != none
+    pub bool containsKey(keeps K key) => this.findSlot(key) != none
 
     // Returns the value for key, or none if not present.
-    V? get(keeps K key)
+    pub V? get(keeps K key)
     {
         i64? idx = this.findSlot(key);
         if (idx == none) return none;
@@ -170,14 +170,14 @@ impl HashMap<K: Hashable, V>
     // ── Mutation ──────────────────────────────────────────────────────────────
 
     // Insert or update key.  Returns Inserted or Updated(previousValue).
-    PutResult<V> put(K key, V value)
+    pub PutResult<V> put(K key, V value)
     {
         if (this.count >= this.threshold) { this.rehash(); }
 
         i64 start = this.startIndex(key);
         i64 firstTombstone = -1;
 
-        for (i < this.bucketCount)
+        for (i64 i = 0; i < this.bucketCount; i++)
         {
             i64 idx   = (start + i) % this.bucketCount;
             i64 state = this.slotState(idx);
@@ -211,7 +211,7 @@ impl HashMap<K: Hashable, V>
     }
 
     // Remove key.  Returns Removed(value) or Missing.
-    RemoveResult<V> remove(keeps K key)
+    pub RemoveResult<V> remove(keeps K key)
     {
         i64? idx = this.findSlot(key);
         if (idx == none) return RemoveResult.Missing;
@@ -224,7 +224,7 @@ impl HashMap<K: Hashable, V>
     }
 
     // Remove all entries.
-    void clear()
+    pub void clear()
     {
         neb_memset(this.buckets, 0, this.bucketCount * 3 * neb_sizeof_ptr());
         this.count = 0;
@@ -234,18 +234,18 @@ impl HashMap<K: Hashable, V>
 
     // Return a new map containing all entries from this, then all from other.
     // On key collision, other's value wins.
-    HashMap<K, V> merge(keeps HashMap<K, V> other)
+    pub HashMap<K, V> merge(keeps HashMap<K, V> other)
     {
         var result = HashMap<K, V>.new();
 
-        for (i < this.bucketCount)
+        for (i64 i = 0; i < this.bucketCount; i++)
         {
             if (this.slotState(i) == 1)
             {
                 result.put(this.slotKey(i), this.slotValue(i));
             }
         }
-        for (i < other.bucketCount)
+        for (i64 i = 0; i < other.bucketCount; i++)
         {
             if (other.slotState(i) == 1)
             {

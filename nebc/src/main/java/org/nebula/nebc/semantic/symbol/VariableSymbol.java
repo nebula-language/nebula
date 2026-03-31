@@ -19,6 +19,13 @@ public final class VariableSymbol extends Symbol
 	 */
 	private final boolean backlink;
 
+	/**
+	 * For immutable variables with compile-time constant values (imported or local),
+	 * stores the constant value as a boxed number or string.  {@code null} when
+	 * the value is not known at import time.
+	 */
+	private Object constValue;
+
 	/** Create a regular (non-backlink) symbol. */
 	public VariableSymbol(String name, Type type, boolean mutable, ASTNode declarationNode)
 	{
@@ -50,4 +57,10 @@ public final class VariableSymbol extends Symbol
 	{
 		return backlink;
 	}
+
+	/** Returns the compile-time constant value, or {@code null} if unknown. */
+	public Object getConstValue() { return constValue; }
+
+	/** Sets the compile-time constant value (boxed Number or String). */
+	public void setConstValue(Object value) { this.constValue = value; }
 }

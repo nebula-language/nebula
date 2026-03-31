@@ -220,6 +220,17 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		return null;
 	}
 
+	/** Returns true only if the named symbol is actually a member field of the current type. */
+	private boolean isStructMember(String name)
+	{
+		if (currentTypeDefinition instanceof CompositeType ct)
+		{
+			Symbol memberSym = ct.getMemberScope().resolveLocal(name);
+			return memberSym instanceof VariableSymbol;
+		}
+		return false;
+	}
+
 	private void resetCvtState()
 	{
 		symbolRegion = new IdentityHashMap<>();
@@ -240,7 +251,245 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		// Initialize built-in primitive types as TypeSymbols
 		PrimitiveType.defineAll(globalScope);
 
+		// Built-in assert(bool) -> void
+		FunctionType assertType = new FunctionType(PrimitiveType.VOID, List.of(PrimitiveType.BOOL));
+		globalScope.define(new MethodSymbol("assert", assertType, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()));
+
+		// Built-in print(str) -> void and println variants
+		FunctionType printStrType = new FunctionType(PrimitiveType.VOID, List.of(PrimitiveType.STR));
+		{ MethodSymbol ms = new MethodSymbol("print", printStrType, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("__nebula_rt_print"); globalScope.define(ms); }
+
+		// Register std::math namespace with common math functions
+		declareStdMathNamespace();
+
+		// Register stub traits for std::ops, std::Stringable, std::Eq, std::Safe, std::Ptr, Box
+		declareStdHelperTypes();
+
 		declareTypesRecursive(unit.declarations);
+	}
+
+	private void declareStdMathNamespace()
+	{
+		// Navigate to std::math, creating if needed
+		Symbol stdSym = globalScope.resolveLocal("std");
+		SymbolTable stdScope;
+		if (stdSym instanceof NamespaceSymbol stdNs)
+		{
+			stdScope = stdNs.getMemberTable();
+		}
+		else
+		{
+			NamespaceType stdType = new NamespaceType("std", globalScope);
+			NamespaceSymbol stdNs = new NamespaceSymbol("std", stdType, null);
+			globalScope.define(stdNs);
+			stdScope = stdNs.getMemberTable();
+			stdScope.setOwner(stdNs);
+		}
+
+		Symbol mathSym = stdScope.resolveLocal("math");
+		SymbolTable mathScope;
+		if (mathSym instanceof NamespaceSymbol mathNs)
+		{
+			mathScope = mathNs.getMemberTable();
+		}
+		else
+		{
+			NamespaceType mathType = new NamespaceType("math", stdScope);
+			NamespaceSymbol mathNs = new NamespaceSymbol("math", mathType, null);
+			stdScope.define(mathNs);
+			mathScope = mathNs.getMemberTable();
+			mathScope.setOwner(mathNs);
+		}
+
+		// Register common math functions
+		FunctionType f64ToF64 = new FunctionType(PrimitiveType.F64, List.of(PrimitiveType.F64));
+		FunctionType f64f64ToF64 = new FunctionType(PrimitiveType.F64, List.of(PrimitiveType.F64, PrimitiveType.F64));
+
+		{ MethodSymbol ms = new MethodSymbol("abs", f64ToF64, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__math__abs"); mathScope.define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("sqrt", f64ToF64, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__math__sqrt"); mathScope.define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("pow", f64f64ToF64, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__math__pow"); mathScope.define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("floor", f64ToF64, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__math__floor"); mathScope.define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("ceil", f64ToF64, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__math__ceil"); mathScope.define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("max", f64f64ToF64, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__math__max"); mathScope.define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("min", f64f64ToF64, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__math__min"); mathScope.define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("log", f64ToF64, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__math__log"); mathScope.define(ms); }
+	}
+
+	private void declareStdHelperTypes()
+	{
+		// Navigate to std namespace
+		Symbol stdSym = globalScope.resolveLocal("std");
+		SymbolTable stdScope;
+		if (stdSym instanceof NamespaceSymbol stdNs)
+		{
+			stdScope = stdNs.getMemberTable();
+		}
+		else
+		{
+			return; // std namespace should exist at this point
+		}
+
+		// std::Stringable — trait stub
+		TraitType stringableTrait = new TraitType("Stringable", stdScope);
+		FunctionType toStrType = new FunctionType(PrimitiveType.STR, List.of(stringableTrait));
+		MethodSymbol toStrMethod = new MethodSymbol("toStr", toStrType, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList());
+		stringableTrait.addRequiredMethod(toStrMethod);
+		stdScope.define(new TypeSymbol("Stringable", stringableTrait, null));
+
+		// std::Eq — trait stub
+		TraitType eqTrait = new TraitType("Eq", stdScope);
+		stdScope.define(new TypeSymbol("Eq", eqTrait, null));
+
+		// std::Safe — trait stub
+		TraitType safeTrait = new TraitType("Safe", stdScope);
+		stdScope.define(new TypeSymbol("Safe", safeTrait, null));
+
+		// std::Ptr — struct stub with from() method
+		StructType ptrType = new StructType("Ptr", stdScope);
+		FunctionType ptrFromType = new FunctionType(ptrType, List.of(Type.ANY));
+		MethodSymbol ptrFrom = new MethodSymbol("from", ptrFromType, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList());
+		ptrFrom.setOverriddenMangledName("std__Ptr__from");
+		ptrType.getMemberScope().define(ptrFrom);
+		stdScope.define(new TypeSymbol("Ptr", ptrType, null));
+
+		// std::ops namespace with Add, Sub, Mul, Neg traits
+		Symbol opsSym = stdScope.resolveLocal("ops");
+		SymbolTable opsScope;
+		if (opsSym instanceof NamespaceSymbol opsNs)
+		{
+			opsScope = opsNs.getMemberTable();
+		}
+		else
+		{
+			NamespaceType opsType = new NamespaceType("ops", stdScope);
+			NamespaceSymbol opsNs = new NamespaceSymbol("ops", opsType, null);
+			stdScope.define(opsNs);
+			opsScope = opsNs.getMemberTable();
+			opsScope.setOwner(opsNs);
+		}
+		for (String opName : new String[]{"Add", "Sub", "Mul", "Neg"})
+		{
+			TraitType opTrait = new TraitType(opName, opsScope);
+			opsScope.define(new TypeSymbol(opName, opTrait, null));
+		}
+
+		// Box<T> — generic struct stub
+		StructType boxType = new StructType("Box", globalScope);
+		TypeParameterType boxT = new TypeParameterType("T", null);
+		boxType.getMemberScope().define(new TypeSymbol("T", boxT, null));
+		FunctionType boxNewType = new FunctionType(boxType, List.of(boxType, boxT));
+		boxType.getMemberScope().define(new MethodSymbol("new", boxNewType, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()));
+		// Box.of(T) — static factory: heap-allocates T, returns Box<T>. Handled inline by codegen.
+		boxType.getMemberScope().define(new MethodSymbol("of", boxNewType, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()));
+		// Note: 'value' is NOT a method — Box<T>.field auto-derefs to T's field via codegen
+		globalScope.define(new TypeSymbol("Box", boxType, null));
+
+		// Result<T,E> — generic union stub
+		UnionType resultType = new UnionType("Result", globalScope);
+		TypeParameterType resultT = new TypeParameterType("T", null);
+		TypeParameterType resultE = new TypeParameterType("E", null);
+		resultType.getMemberScope().define(new TypeSymbol("T", resultT, null));
+		resultType.getMemberScope().define(new TypeSymbol("E", resultE, null));
+		// Ok(T) and Err(E) variant constructors — registered as type symbols with struct types
+		StructType okVariant = new StructType("Ok", resultType.getMemberScope());
+		okVariant.getMemberScope().define(new VariableSymbol("value", resultT, false, null));
+		resultType.getMemberScope().define(new TypeSymbol("Ok", okVariant, null));
+		StructType errVariant = new StructType("Err", resultType.getMemberScope());
+		errVariant.getMemberScope().define(new VariableSymbol("value", resultE, false, null));
+		resultType.getMemberScope().define(new TypeSymbol("Err", errVariant, null));
+		// unwrap() method
+		FunctionType unwrapType = new FunctionType(resultT, List.of(resultType));
+		resultType.getMemberScope().define(new MethodSymbol("unwrap", unwrapType, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()));
+		FunctionType isOkType = new FunctionType(PrimitiveType.BOOL, List.of(resultType));
+		resultType.getMemberScope().define(new MethodSymbol("isOk", isOkType, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()));
+		resultType.getMemberScope().define(new MethodSymbol("isErr", isOkType, java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()));
+		globalScope.define(new TypeSymbol("Result", resultType, null));
+
+		// List<T> — alias for std::collections::ArrayList
+		StructType listType = new StructType("List", globalScope);
+		TypeParameterType listT = new TypeParameterType("T", null);
+		listType.getMemberScope().define(new TypeSymbol("T", listT, null));
+		// Physical layout fields matching ArrayList: { Ref data; i64 count; i64 capacity }
+		listType.getMemberScope().define(new org.nebula.nebc.semantic.symbol.VariableSymbol("data", PrimitiveType.REF, false, null));
+		listType.getMemberScope().define(new org.nebula.nebc.semantic.symbol.VariableSymbol("count", PrimitiveType.I64, false, null));
+		listType.getMemberScope().define(new org.nebula.nebc.semantic.symbol.VariableSymbol("capacity", PrimitiveType.I64, false, null));
+		{ MethodSymbol ms = new MethodSymbol("new", new FunctionType(listType, List.of(listType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__new"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("add", new FunctionType(PrimitiveType.VOID, List.of(listType, listT)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__add"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("push", new FunctionType(PrimitiveType.VOID, List.of(listType, listT)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__add"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("get", new FunctionType(listT, List.of(listType, PrimitiveType.I64)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__operator[]"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("set", new FunctionType(PrimitiveType.VOID, List.of(listType, PrimitiveType.I64, listT)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__set"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("size", new FunctionType(PrimitiveType.I64, List.of(listType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__size"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("length", new FunctionType(PrimitiveType.I64, List.of(listType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__size"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("isEmpty", new FunctionType(PrimitiveType.BOOL, List.of(listType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__isEmpty"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("remove", new FunctionType(PrimitiveType.VOID, List.of(listType, listT)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__remove"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("removeAt", new FunctionType(new OptionalType(listT), List.of(listType, PrimitiveType.I64)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__removeAt"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("contains", new FunctionType(PrimitiveType.BOOL, List.of(listType, listT)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__contains"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("insertAt", new FunctionType(PrimitiveType.VOID, List.of(listType, PrimitiveType.I64, listT)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__insertAt"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("pop", new FunctionType(new OptionalType(listT), List.of(listType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__pop"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("clear", new FunctionType(PrimitiveType.VOID, List.of(listType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__clear"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("sort", new FunctionType(PrimitiveType.VOID, List.of(listType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__sort"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("sortBy", new FunctionType(PrimitiveType.VOID, List.of(listType, Type.ANY)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__sortBy"); listType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("take", new FunctionType(listType, List.of(listType, PrimitiveType.I64)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__ArrayList__take"); listType.getMemberScope().define(ms); }
+		globalScope.define(new TypeSymbol("List", listType, null));
+
+		// Also register in std::collections namespace
+		Symbol collSym = stdScope.resolveLocal("collections");
+		SymbolTable collScope = null;
+		if (collSym instanceof NamespaceSymbol collNs)
+		{
+			collScope = collNs.getMemberTable();
+		}
+		else
+		{
+			NamespaceType collType = new NamespaceType("collections", stdScope);
+			NamespaceSymbol collNs = new NamespaceSymbol("collections", collType, null);
+			stdScope.define(collNs);
+			collScope = collNs.getMemberTable();
+			collScope.setOwner(collNs);
+		}
+		collScope.alias("List", globalScope.resolveLocal("List"));
+
+		// Map<K,V> — alias for std::collections::HashMap
+		StructType mapType = new StructType("Map", globalScope);
+		TypeParameterType mapK = new TypeParameterType("K", null);
+		TypeParameterType mapV = new TypeParameterType("V", null);
+		mapType.getMemberScope().define(new TypeSymbol("K", mapK, null));
+		mapType.getMemberScope().define(new TypeSymbol("V", mapV, null));
+		// Physical layout fields matching HashMap: { Ref buckets; i64 bucketCount; i64 count; i64 threshold }
+		mapType.getMemberScope().define(new VariableSymbol("buckets", PrimitiveType.REF, false, null));
+		mapType.getMemberScope().define(new VariableSymbol("bucketCount", PrimitiveType.I64, false, null));
+		mapType.getMemberScope().define(new VariableSymbol("count", PrimitiveType.I64, false, null));
+		mapType.getMemberScope().define(new VariableSymbol("threshold", PrimitiveType.I64, false, null));
+		{ MethodSymbol ms = new MethodSymbol("new", new FunctionType(mapType, List.of(mapType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__HashMap__new"); mapType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("put", new FunctionType(PrimitiveType.VOID, List.of(mapType, mapK, mapV)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__HashMap__put"); mapType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("insert", new FunctionType(PrimitiveType.VOID, List.of(mapType, mapK, mapV)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__HashMap__put"); mapType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("get", new FunctionType(new OptionalType(mapV), List.of(mapType, mapK)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__HashMap__get"); mapType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("containsKey", new FunctionType(PrimitiveType.BOOL, List.of(mapType, mapK)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__HashMap__containsKey"); mapType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("remove", new FunctionType(PrimitiveType.VOID, List.of(mapType, mapK)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__HashMap__remove"); mapType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("size", new FunctionType(PrimitiveType.I64, List.of(mapType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__HashMap__size"); mapType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("length", new FunctionType(PrimitiveType.I64, List.of(mapType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__HashMap__size"); mapType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("isEmpty", new FunctionType(PrimitiveType.BOOL, List.of(mapType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__HashMap__isEmpty"); mapType.getMemberScope().define(ms); }
+		globalScope.define(new TypeSymbol("Map", mapType, null));
+		collScope.alias("Map", globalScope.resolveLocal("Map"));
+
+		// Set<T> — std::collections::Set
+		StructType setType = new StructType("Set", globalScope);
+		TypeParameterType setT = new TypeParameterType("T", null);
+		setType.getMemberScope().define(new TypeSymbol("T", setT, null));
+		// Physical layout fields matching Set: { T[] items }
+		setType.getMemberScope().define(new VariableSymbol("items", new ArrayType(setT, 0), false, null));
+		{ MethodSymbol ms = new MethodSymbol("new", new FunctionType(setType, List.of(setType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__new"); setType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("add", new FunctionType(PrimitiveType.VOID, List.of(setType, setT)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__add"); setType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("contains", new FunctionType(PrimitiveType.BOOL, List.of(setType, setT)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__contains"); setType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("remove", new FunctionType(PrimitiveType.VOID, List.of(setType, setT)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__remove"); setType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("size", new FunctionType(PrimitiveType.I64, List.of(setType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__size"); setType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("length", new FunctionType(PrimitiveType.I64, List.of(setType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__size"); setType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("isEmpty", new FunctionType(PrimitiveType.BOOL, List.of(setType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__isEmpty"); setType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("union", new FunctionType(setType, List.of(setType, setType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__union"); setType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("intersect", new FunctionType(setType, List.of(setType, setType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__intersect"); setType.getMemberScope().define(ms); }
+		{ MethodSymbol ms = new MethodSymbol("difference", new FunctionType(setType, List.of(setType, setType)), java.util.Collections.emptyList(), false, null, java.util.Collections.emptyList()); ms.setOverriddenMangledName("std__collections__Set__difference"); setType.getMemberScope().define(ms); }
+		globalScope.define(new TypeSymbol("Set", setType, null));
+		collScope.alias("Set", globalScope.resolveLocal("Set"));
 	}
 
 	private void declareTypesRecursive(List<ASTNode> declarations)
@@ -305,6 +554,9 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				}
 				if (!ud.attributes.isEmpty())
 					sym.setAttributes(collectAttributeInfos(ud.attributes));
+				// Pre-register type parameters so that generic-argument resolution
+				// (e.g. Result<i32, str>) works in Phase 1.5 method signatures.
+				defineTypeParamsInScope(ud.typeParams, unionType.getMemberScope());
 			}
 			else if (decl instanceof TraitDeclaration td)
 			{
@@ -470,6 +722,15 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	{
 		if (declarations == null)
 			return;
+		// First pass: apply use imports so cross-namespace types are available when
+		// resolving method return types and parameter types in this namespace.
+		for (ASTNode decl : declarations)
+		{
+			if (decl instanceof UseStatement us)
+			{
+				try { us.accept(this); } catch (Exception ignored) {}
+			}
+		}
 		for (ASTNode decl : declarations)
 		{
 			if (decl instanceof NamespaceDeclaration nd)
@@ -705,6 +966,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			if (existing instanceof NamespaceSymbol ns)
 			{
 				nsSym = ns;
+				// If the namespace was pre-created by the compiler (e.g. hardcoded std::math)
+				// and now we encounter it from source, update the declaration node so the
+				// SymbolExporter will include it in .nebsym output.
+				if (nsSym.getDeclarationNode() == null && node != null)
+				{
+					nsSym.setDeclarationNode(node);
+				}
 			}
 			else
 			{
@@ -1099,9 +1367,17 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				elementCount = evaluateConstantIntExpression(atn.sizeExpression);
 				if (elementCount <= 0)
 				{
-					error(DiagnosticCode.INTERNAL_ERROR, atn.sizeExpression,
-						"Fixed-size array length must be a positive integer constant.");
-					return Type.ERROR;
+					// Allow identifier-based sizes (const generics like 'N') — use 0 as sentinel
+					if (atn.sizeExpression instanceof org.nebula.nebc.ast.expressions.IdentifierExpression)
+					{
+						elementCount = 0; // dynamic/const-generic size
+					}
+					else
+					{
+						error(DiagnosticCode.INTERNAL_ERROR, atn.sizeExpression,
+							"Fixed-size array length must be a positive integer constant.");
+						return Type.ERROR;
+					}
 				}
 			}
 			return new ArrayType(elem, elementCount);
@@ -1170,12 +1446,25 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 
 		currentScope = enterNamespace(node, baseScope);
 
-		// Pre-pass methods — only define if not already registered by Phase 1
+		// Pre-pass 0: apply use imports so cross-namespace types are visible during method signature resolution
+		for (ASTNode member : node.members)
+		{
+			if (member instanceof UseStatement us)
+			{
+				try { us.accept(this); } catch (Exception ignored) {}
+			}
+		}
+
+		// Pre-pass methods — only define if not already registered by previous phases
 		for (ASTNode member : node.members)
 		{
 			if (member instanceof MethodDeclaration md)
 			{
-				if (getSymbol(md, MethodSymbol.class) == null)
+				// Re-define if already registered with an ERROR return type (from phase 1.5 without imports)
+				MethodSymbol existing = getSymbol(md, MethodSymbol.class);
+				if (existing == null)
+					defineMethodSignature(md);
+				else if (existing.getType().returnType == Type.ERROR)
 					defineMethodSignature(md);
 			}
 			else if (member instanceof ExternDeclaration ed)
@@ -1449,6 +1738,28 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 						error(DiagnosticCode.UNDEFINED_SYMBOL, node, "Unknown trait/tag bound '" + nt.qualifiedName + "'");
 					}
 				}
+				// Multi-bound support: if there are additional bounds, create a synthetic
+				// TraitType with methods from all bounds merged into one member scope.
+				if (bound instanceof TraitType primaryTrait && !gp.additionalBounds().isEmpty())
+				{
+					TraitType synthetic = new TraitType(primaryTrait.name(), globalScope);
+					// Link the primary trait's scope as a super-scope so methods
+					// added later (Phase 1.75) are still visible.
+					synthetic.getMemberScope().addSuperScope(primaryTrait.getMemberScope());
+					// Link additional bounds' scopes
+					for (org.nebula.nebc.ast.types.TypeNode addBound : gp.additionalBounds())
+					{
+						if (addBound instanceof org.nebula.nebc.ast.types.NamedType addNt)
+						{
+							TypeSymbol addSym = outerScope.resolveType(addNt.qualifiedName);
+							if (addSym != null && addSym.getType() instanceof TraitType addTt)
+							{
+								synthetic.getMemberScope().addSuperScope(addTt.getMemberScope());
+							}
+						}
+					}
+					bound = synthetic;
+				}
 				TypeParameterType tpt = new TypeParameterType(gp.name(), bound);
 				typeParams.add(tpt);
 				currentScope.define(new TypeSymbol(gp.name(), tpt, node));
@@ -1721,6 +2032,16 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			{
 				VariableSymbol varSym = new VariableSymbol(
 					decl.name(), actualType, mutable, node.isBacklink, node);
+
+				// For non-mutable variables with literal initializers, record the
+				// compile-time constant value so it can be exported via .nebsym and
+				// inlined by consumers that import this symbol.
+				if (!mutable && decl.hasInitializer()
+						&& decl.initializer() instanceof org.nebula.nebc.ast.expressions.LiteralExpression lit)
+				{
+					varSym.setConstValue(lit.value);
+				}
+
 				recordSymbol(node, varSym);
 				if (!currentScope.define(varSym))
 				{
@@ -1729,6 +2050,50 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 
 			}
 		}
+		return PrimitiveType.VOID;
+	}
+
+	@Override
+	public Type visitTupleDestructuringDeclaration(TupleDestructuringDeclaration node)
+	{
+		Type initType = node.initializer.accept(this);
+		if (!(initType instanceof TupleType tupleType))
+		{
+			error(DiagnosticCode.TYPE_MISMATCH, node.initializer, "tuple", initType != null ? initType.name() : "unknown");
+			return PrimitiveType.VOID;
+		}
+
+		if (tupleType.elementTypes.size() != node.bindings.size())
+		{
+			error(DiagnosticCode.TYPE_MISMATCH, node, "tuple arity " + node.bindings.size(), "tuple arity " + tupleType.elementTypes.size());
+		}
+
+		for (int i = 0; i < node.bindings.size(); i++)
+		{
+			TupleDestructuringDeclaration.Binding binding = node.bindings.get(i);
+			Type inferredType = (i < tupleType.elementTypes.size()) ? tupleType.elementTypes.get(i) : Type.ERROR;
+			Type bindingType = inferredType;
+
+			if (binding.type() != null)
+			{
+				Type declaredType = resolveType(binding.type());
+				if (inferredType != Type.ERROR && declaredType != Type.ERROR && !inferredType.isAssignableTo(declaredType))
+				{
+					error(DiagnosticCode.TYPE_MISMATCH, node.initializer, declaredType.name(), inferredType.name());
+				}
+				bindingType = declaredType;
+			}
+
+			if (bindingType != Type.ERROR)
+			{
+				VariableSymbol varSym = new VariableSymbol(binding.name(), bindingType, node.isVar, false, node);
+				if (!currentScope.define(varSym))
+				{
+					error(DiagnosticCode.DUPLICATE_SYMBOL, node, binding.name());
+				}
+			}
+		}
+
 		return PrimitiveType.VOID;
 	}
 
@@ -1918,7 +2283,31 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			itemType = resolveType(node.variableType);
 		}
 
-		// Define the loop variable as a VariableSymbol
+		// Tuple destructuring foreach: bind each element as a separate variable
+		if (node.tupleBindings != null)
+		{
+			for (int i = 0; i < node.tupleBindings.size(); i++)
+			{
+				org.nebula.nebc.ast.statements.ForeachStatement.TupleBinding binding = node.tupleBindings.get(i);
+				Type bindType;
+				if (itemType instanceof TupleType tt && i < tt.elementTypes.size())
+				{
+					bindType = tt.elementTypes.get(i);
+				}
+				else
+				{
+					bindType = resolveType(binding.type());
+					if (bindType == Type.ERROR)
+						bindType = Type.ANY;
+				}
+				if (!binding.name().equals("_"))
+				{
+					currentScope.define(new VariableSymbol(binding.name(), bindType, false, node));
+				}
+			}
+		}
+
+		// Define the synthetic or simple loop variable
 		VariableSymbol loopVar = new VariableSymbol(node.variableName, itemType, false, node);
 		currentScope.define(loopVar);
 
@@ -1956,6 +2345,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			if (opName != null)
 			{
 				Symbol opSym = ct.getMemberScope().resolve(opName);
+				// Also check trait-based operator method names (add, sub, mul, div, mod, eq, ne)
+				if (!(opSym instanceof MethodSymbol))
+				{
+					String traitOp = traitOperatorMethodName(node.operator);
+					if (traitOp != null)
+						opSym = ct.getMemberScope().resolve(traitOp);
+				}
 				if (opSym instanceof MethodSymbol ms)
 				{
 					FunctionType ft = ms.getType();
@@ -2035,6 +2431,8 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			case GE:
 				if (isNumeric(left) && isNumeric(right))
 					result = PrimitiveType.BOOL;
+				else if (left == PrimitiveType.STR && right == PrimitiveType.STR)
+					result = PrimitiveType.BOOL; // lexicographic string comparison
 				else if (left instanceof TypeParameterType || right instanceof TypeParameterType)
 					result = PrimitiveType.BOOL; // generic type — resolved at monomorphization
 				else
@@ -2259,13 +2657,31 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			List<Expression> effectiveArgs = new ArrayList<>(node.arguments);
 			// If it's a member access call, prepend the receiver to effectiveArgs
 			// only if the function's first parameter is the object type (i.e. 'this').
+			boolean addedSafeReceiver = false;
 			if (node.target instanceof MemberAccessExpression mae && !fn.parameterTypes.isEmpty())
 			{
 				Type receiverType = mae.target.accept(this);
 				Type firstParam = fn.parameterTypes.get(0);
-				if (receiverMatchesFirstParam(receiverType, firstParam))
+				// For safe optional chaining '?.', unwrap the optional receiver before matching
+				Type unwrappedReceiver = (mae.isSafe && receiverType instanceof OptionalType ot) ? ot.innerType : receiverType;
+				// Skip receiver prepend for union variant constructors invoked via
+				// TypeName.Variant(...) — these are static factories, not instance methods.
+				boolean isVariantFactory = false;
+				if (mae.target instanceof IdentifierExpression recvIdent)
+				{
+					Symbol recvSym = currentScope.resolve(recvIdent.name);
+					if (recvSym instanceof TypeSymbol ts
+							&& ts.getType() instanceof UnionType
+							&& methodSym != null
+							&& methodSym.getDeclarationNode() instanceof UnionDeclaration)
+					{
+						isVariantFactory = true;
+					}
+				}
+				if (!isVariantFactory && receiverMatchesFirstParam(unwrappedReceiver, firstParam))
 				{
 					effectiveArgs.add(0, mae.target);
+					addedSafeReceiver = mae.isSafe && receiverType instanceof OptionalType;
 				}
 			}
 
@@ -2369,7 +2785,25 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				}
 			}
 
-			if (effectiveArgs.size() != fn.parameterTypes.size())
+			// Auto-wrap multi-arg calls to tuple-payload union variant constructors
+			if (fn.parameterTypes.size() == 1
+					&& fn.parameterTypes.get(0) instanceof TupleType expectedTuple
+					&& effectiveArgs.size() == expectedTuple.elementTypes.size()
+					&& effectiveArgs.size() > 1)
+			{
+				for (int i = 0; i < effectiveArgs.size(); i++)
+				{
+					Type paramType = expectedTuple.elementTypes.get(i);
+					Type prevExpected = expectedExpressionType;
+					expectedExpressionType = paramType;
+					Type argType = effectiveArgs.get(i).accept(this);
+					expectedExpressionType = prevExpected;
+					if (argType != Type.ERROR && !argType.isAssignableTo(paramType))
+						error(DiagnosticCode.ARGUMENT_TYPE_MISMATCH, effectiveArgs.get(i), (i + 1), paramType.name(), argType.name());
+				}
+				result = fn.returnType;
+			}
+			else if (effectiveArgs.size() != fn.parameterTypes.size())
 			{
 				error(DiagnosticCode.ARGUMENT_COUNT_MISMATCH, node, fn.parameterTypes.size(), effectiveArgs.size());
 				result = fn.returnType;
@@ -2385,12 +2819,21 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 					expectedExpressionType = prevExpected;
 					if (argType == Type.ERROR)
 						continue;
+					// Safe optional chaining receiver: accept OptionalType(T) for param T
+					if (i == 0 && addedSafeReceiver && argType instanceof OptionalType argOt
+							&& argOt.innerType.isAssignableTo(paramType))
+						continue;
 					if (!argType.isAssignableTo(paramType))
 					{
 						error(DiagnosticCode.ARGUMENT_TYPE_MISMATCH, effectiveArgs.get(i), (i + 1), paramType.name(), argType.name());
 					}
 				}
 				result = fn.returnType;
+			}
+			// Safe optional chaining: s?.method() → result is Optional<returnType>
+			if (addedSafeReceiver && result != PrimitiveType.VOID && !(result instanceof OptionalType))
+			{
+				result = new OptionalType(result);
 			}
 		}
 		else
@@ -2402,6 +2845,31 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				arg.accept(this);
 			}
 			result = targetType;
+		}
+
+		// Refine the return type of built-in tryCast<T>() to T? using the rawTypeArgText
+		if (result instanceof OptionalType ot && ot.innerType == Type.ANY
+				&& node.target instanceof MemberAccessExpression tryCastMae
+				&& tryCastMae.memberName.equals("tryCast"))
+		{
+			Type castTarget = null;
+			if (!node.rawTypeArgText.isEmpty())
+			{
+				TypeSymbol castTargetSym = currentScope.resolveType(node.rawTypeArgText);
+				if (castTargetSym != null)
+					castTarget = castTargetSym.getType();
+			}
+			// Fallback: infer target type from declaration context (e.g. u8? x = v.tryCast<u8>())
+			if (castTarget == null && expectedExpressionType instanceof OptionalType expOpt
+					&& expOpt.innerType != Type.ANY)
+			{
+				castTarget = expOpt.innerType;
+			}
+			if (castTarget != null)
+			{
+				result = new OptionalType(castTarget);
+				node.setTypeArguments(List.of(castTarget));
+			}
 		}
 
 		recordType(node, result);
@@ -2584,27 +3052,110 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		}
 		else if (objectType instanceof CompositeType ct)
 		{
+			// Box<T> auto-deref: for member access on Box<T>, look through to T's members first
+			String ctName = ct.name();
+			if (ctName.startsWith("Box<") && ctName.endsWith(">"))
+			{
+				String innerTypeName = ctName.substring(4, ctName.length() - 1).trim();
+				Symbol innerSym = currentScope.resolve(innerTypeName);
+				if (innerSym instanceof TypeSymbol ts && ts.getType() instanceof CompositeType innerCt)
+				{
+					Symbol innerMember = innerCt.getMemberScope().resolve(node.memberName);
+					if (innerMember instanceof VariableSymbol ivs)
+					{
+						Type result = ivs.getType();
+						recordSymbol(node, innerMember);
+						recordType(node, result);
+						return result;
+					}
+				}
+			}
 			memberScope = ct.getMemberScope();
 		}
 		else if (objectType instanceof NamespaceType nt)
 		{
 			memberScope = nt.getMemberScope();
 		}
-		else if (objectType instanceof TypeParameterType tpt && tpt.hasBound())
+		else if (objectType instanceof TypeParameterType tpt)
 		{
-			memberScope = tpt.getBound().getMemberScope();
+			if (tpt.hasBound())
+			{
+				memberScope = tpt.getBound().getMemberScope();
+			}
+			else
+			{
+				// Unbounded type parameter — allow member access returning ANY
+				recordType(node, Type.ANY);
+				return Type.ANY;
+			}
 		}
-		else if (objectType instanceof PrimitiveType)
+		else if (objectType instanceof PrimitiveType pt)
 		{
+			// Built-in str methods — return FunctionType so invocation works
+			// Include str as implicit 'this' first parameter
+			if (pt == PrimitiveType.STR)
+			{
+				FunctionType builtinFn = null;
+				switch (node.memberName)
+				{
+					case "split" ->
+						builtinFn = new FunctionType(new ArrayType(PrimitiveType.STR, -1), List.of(PrimitiveType.STR, PrimitiveType.STR));
+					case "contains", "startsWith", "endsWith" ->
+						builtinFn = new FunctionType(PrimitiveType.BOOL, List.of(PrimitiveType.STR, PrimitiveType.STR));
+					case "trim", "toUpper", "toLower" ->
+						builtinFn = new FunctionType(PrimitiveType.STR, List.of(PrimitiveType.STR));
+					case "slice", "substr" ->
+						builtinFn = new FunctionType(PrimitiveType.STR, List.of(PrimitiveType.STR, PrimitiveType.I32, PrimitiveType.I32));
+					case "replace" ->
+						builtinFn = new FunctionType(PrimitiveType.STR, List.of(PrimitiveType.STR, PrimitiveType.STR, PrimitiveType.STR));
+					case "length" ->
+						builtinFn = new FunctionType(PrimitiveType.I32, List.of(PrimitiveType.STR));
+					case "tryCast" ->
+						builtinFn = new FunctionType(new OptionalType(Type.ANY), List.of(PrimitiveType.STR));
+				}
+				if (builtinFn != null)
+				{
+					recordType(node, builtinFn);
+					return builtinFn;
+				}
+			}
+			// Built-in numeric methods (e.g. tryCast)
+			if (isNumeric(pt))
+			{
+				if (node.memberName.equals("tryCast"))
+				{
+					FunctionType builtinFn = new FunctionType(new OptionalType(Type.ANY), List.of(pt));
+					recordType(node, builtinFn);
+					return builtinFn;
+				}
+			}
 			// Check if a trait impl was registered for this primitive
 			memberScope = primitiveImplScopes.get(objectType);
 		}
-		else if (objectType instanceof ArrayType)
+		else if (objectType instanceof ArrayType at)
 		{
-			if (node.memberName.equals("len"))
+			// Built-in array methods — return FunctionType so invocation works
+			// Include the array type as implicit 'this' first parameter
+			FunctionType builtinFn = null;
+			switch (node.memberName)
 			{
-				recordType(node, PrimitiveType.I64);
-				return PrimitiveType.I64;
+				case "len", "length" ->
+					builtinFn = new FunctionType(PrimitiveType.I32, List.of(objectType));
+				case "slice" ->
+					builtinFn = new FunctionType(objectType, List.of(objectType, PrimitiveType.I32, PrimitiveType.I32));
+				case "contains" ->
+					builtinFn = new FunctionType(PrimitiveType.BOOL, List.of(objectType, at.baseType));
+				case "sort" ->
+					builtinFn = new FunctionType(PrimitiveType.VOID, List.of(objectType));
+				case "sortBy" ->
+					builtinFn = new FunctionType(PrimitiveType.VOID, List.of(objectType, Type.ANY));
+				case "take" ->
+					builtinFn = new FunctionType(objectType, List.of(objectType, PrimitiveType.I32));
+			}
+			if (builtinFn != null)
+			{
+				recordType(node, builtinFn);
+				return builtinFn;
 			}
 			// Arrays expose trait methods (e.g. toStr) via the synthetic Stringable scope
 			memberScope = getOrCreateStructuralStringableScope(objectType);
@@ -2695,10 +3246,14 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			// scope chain — i.e. it is NOT found in the method boundary scope or below.
 			// Enum variants (declared by EnumDeclaration) are never struct fields and
 			// must never be flagged, regardless of whether their name is qualified.
+			// Namespace-level 'let' constants and qualified names (containing '::' or '.')
+			// are also excluded — they are not struct fields.
 			if (currentTypeDefinition != null && currentMethodBoundaryScope != null
 					&& vs.getType() != currentTypeDefinition // 'this' itself is fine
 					&& !(sym.getDeclarationNode() instanceof MethodDeclaration)
 					&& !(sym.getDeclarationNode() instanceof EnumDeclaration)
+					&& !node.name.contains("::") && !node.name.contains(".") // qualified names are never bare field access
+					&& isStructMember(node.name)  // only flag genuine struct fields
 					&& resolveInMethodScope(node.name) == null)
 			{
 				error(DiagnosticCode.BARE_FIELD_ACCESS, node, node.name, node.name);
@@ -2949,6 +3504,16 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			case MINUS, PLUS -> {
 				if (!isNumeric(operand))
 				{
+					// Check for Neg trait implementation on composite types
+					if (node.operator == org.nebula.nebc.ast.UnaryOperator.MINUS
+							&& operand instanceof CompositeType ct)
+					{
+						Symbol negSym = ct.getMemberScope().resolve("neg");
+						if (negSym instanceof MethodSymbol negMs)
+						{
+							yield negMs.getType().returnType;
+						}
+					}
 					error(DiagnosticCode.UNARY_MATH_NUMERIC, node, operand.name());
 					yield Type.ERROR;
 				}
@@ -3101,6 +3666,9 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		// REF is the implicit 'this' pointer for struct/class methods (constructors).
 		if (firstParam == PrimitiveType.REF && receiverType instanceof CompositeType)
 			return true;
+		// Trait receiver: if firstParam is a TraitType, the receiver likely implements it
+		if (firstParam instanceof TraitType && receiverType instanceof CompositeType)
+			return true;
 		// TypeParameterType<T: Bound> — method declared on the trait or tag, receiver is T
 		if (receiverType instanceof TypeParameterType tpt && tpt.hasBound()
 				&& firstParam instanceof CompositeType ft
@@ -3140,6 +3708,25 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			case LE   -> "operator<=";
 			case GE   -> "operator>=";
 			default   -> null;
+		};
+	}
+
+	/**
+	 * Maps a binary operator to the corresponding std::ops trait method name
+	 * (e.g. ADD -> "add" for impl std::ops::Add).
+	 */
+	private String traitOperatorMethodName(org.nebula.nebc.ast.BinaryOperator op)
+	{
+		return switch (op)
+		{
+			case ADD -> "add";
+			case SUB -> "sub";
+			case MUL -> "mul";
+			case DIV -> "div";
+			case MOD -> "mod";
+			case EQ  -> "eq";
+			case NE  -> "ne";
+			default  -> null;
 		};
 	}
 
@@ -3269,15 +3856,59 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				{
 					SymbolTable memberScope = ct.getMemberScope();
 					Symbol variantSym = memberScope.resolve(variantSimpleName(dp.variantName));
+					// Fallback for monomorphized composites (e.g. Result<i32,str>)
+					// whose variant constructors aren't in the snapshot scope: look
+					// up the variant from the base (unmonomorphized) type and apply
+					// the type-argument substitution to its payload types.
+					Substitution matchSub = null;
+					if (variantSym == null && ct.name().contains("<"))
+					{
+						String baseName = ct.name().substring(0, ct.name().indexOf('<'));
+						TypeSymbol baseSym = currentScope.resolveType(baseName);
+						if (baseSym != null && baseSym.getType() instanceof CompositeType baseCt)
+						{
+							variantSym = baseCt.getMemberScope().resolve(variantSimpleName(dp.variantName));
+							// Build a substitution from the base type's type params
+							// to the monomorphized type's concrete type args.
+							List<TypeParameterType> tps = baseCt.getMemberScope().getSymbols().values().stream()
+								.filter(s -> s instanceof TypeSymbol tts && tts.getType() instanceof TypeParameterType)
+								.map(s -> (TypeParameterType) s.getType())
+								.collect(java.util.stream.Collectors.toList());
+							// Parse concrete type args from the monomorphized name
+							String argsText = ct.name().substring(ct.name().indexOf('<') + 1, ct.name().lastIndexOf('>'));
+							List<String> argNames = splitTopLevelTypeArgs(argsText);
+							if (tps.size() == argNames.size())
+							{
+								matchSub = new Substitution();
+								for (int i = 0; i < tps.size(); i++)
+								{
+									Type concrete = resolveType(new NamedType(node.getSpan(), argNames.get(i).trim(), java.util.Collections.emptyList()));
+									if (concrete != null && concrete != Type.ERROR)
+										matchSub.bind(tps.get(i), concrete);
+								}
+							}
+						}
+					}
 					if (variantSym instanceof MethodSymbol ms)
 					{
-						// FunctionType(unionType, [payloadType]) — skip the first 'this'-like param
 						FunctionType fnType = ms.getType();
-						// payload params start at index 0 (no prepended 'this' for variants)
-						for (int i = 0; i < dp.bindings.size() && i < fnType.parameterTypes.size(); i++)
+						if (matchSub != null)
+							fnType = (FunctionType) matchSub.substitute(fnType);
+						// Handle multi-field variants: single TupleType payload spread to multiple bindings
+						if (fnType.parameterTypes.size() == 1
+								&& fnType.parameterTypes.get(0) instanceof TupleType tt
+								&& dp.bindings.size() > 1)
 						{
-							Type bindingType = fnType.parameterTypes.get(i);
-							currentScope.define(new VariableSymbol(dp.bindings.get(i), bindingType, false, node));
+							for (int i = 0; i < dp.bindings.size() && i < tt.elementTypes.size(); i++)
+								currentScope.define(new VariableSymbol(dp.bindings.get(i), tt.elementTypes.get(i), false, node));
+						}
+						else
+						{
+							for (int i = 0; i < dp.bindings.size() && i < fnType.parameterTypes.size(); i++)
+							{
+								Type bindingType = fnType.parameterTypes.get(i);
+								currentScope.define(new VariableSymbol(dp.bindings.get(i), bindingType, false, node));
+							}
 						}
 					}
 				}
@@ -3290,7 +3921,41 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 					}
 				}
 			}
+			else if (arm.pattern instanceof TypePattern tp && tp.isBinding())
+			{
+				Type bindingType = resolveType(tp.type);
+				if (bindingType == Type.ERROR)
+					bindingType = matchedType != null ? matchedType : Type.ANY;
+				currentScope.define(new VariableSymbol(tp.variableName, bindingType, false, node));
+			}
+			else if (arm.pattern instanceof TuplePattern tup)
+			{
+				// Bind typed elements of tuple patterns so guards can reference them
+				Type[] elemTypes = null;
+				if (matchedType instanceof TupleType tt)
+					elemTypes = tt.elementTypes.toArray(new Type[0]);
+				for (int pi = 0; pi < tup.elements.size(); pi++)
+				{
+					if (tup.elements.get(pi) instanceof TypePattern tp2 && tp2.isBinding())
+					{
+						Type bt = resolveType(tp2.type);
+						if (bt == Type.ERROR && elemTypes != null && pi < elemTypes.length)
+							bt = elemTypes[pi];
+						if (bt == null || bt == Type.ERROR)
+							bt = Type.ANY;
+						currentScope.define(new VariableSymbol(tp2.variableName, bt, false, node));
+					}
+				}
+			}
 			arm.pattern.accept(this);
+			if (arm.guard != null)
+			{
+				Type guardType = arm.guard.accept(this);
+				if (guardType != Type.ERROR && !guardType.isAssignableTo(PrimitiveType.BOOL))
+				{
+					error(DiagnosticCode.TYPE_MISMATCH, arm.guard, PrimitiveType.BOOL.name(), guardType.name());
+				}
+			}
 			Type armType = arm.result.accept(this);
 			exitScope();
 			if (commonType == null)
@@ -3735,7 +4400,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	/** Returns {@code true} if the pattern is unconditionally a wildcard. */
 	private boolean isWildcardArm(Pattern pat)
 	{
-		return pat instanceof WildcardPattern;
+		// A plain wildcard (_) or a typed binding (T x) with no further constraints
+		// both catch all remaining values and make the match exhaustive.
+		if (pat instanceof WildcardPattern)
+			return true;
+		if (pat instanceof TypePattern tp && tp.isBinding())
+			return true;
+		return false;
 	}
 
 	/**
@@ -3772,6 +4443,18 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 
 		Type thenType = node.thenExpressionBlock.accept(this);
 		Type elseType = node.elseExpressionBlock.accept(this);
+
+		// Coerce 'none' (<any>?) against a concrete type: use the concrete type wrapped as optional.
+		if (isNoneLiteral(elseType) && !isNoneLiteral(thenType))
+		{
+			elseType = thenType instanceof OptionalType ? thenType : new OptionalType(thenType);
+			thenType = elseType;
+		}
+		else if (isNoneLiteral(thenType) && !isNoneLiteral(elseType))
+		{
+			thenType = elseType instanceof OptionalType ? elseType : new OptionalType(elseType);
+			elseType = thenType;
+		}
 
 		if (!thenType.equals(elseType))
 		{
@@ -3931,7 +4614,10 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 
 			for (int i = 0; i < node.elements.size(); i++)
 			{
+				Type prevExpected = expectedExpressionType;
+				expectedExpressionType = targetTt.elementTypes.get(i);
 				Type elemType = node.elements.get(i).accept(this);
+				expectedExpressionType = prevExpected;
 				Type fieldType = targetTt.elementTypes.get(i);
 				if (elemType != Type.ERROR && !elemType.isAssignableTo(fieldType))
 				{
@@ -4039,7 +4725,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		TypeSymbol ts = currentScope.resolveType(name);
 		if (ts == null)
 		{
-			error(DiagnosticCode.UNKNOWN_TYPE, site, name);
+			boolean numericLiteralLike = name != null
+				&& (name.matches("-?\\d+") || name.matches("0x[0-9a-fA-F]+") || name.matches("0b[01]+")
+					|| name.matches("-?\\d+\\.\\d+") || name.matches("-?\\d+\\.\\d+[eE][+-]?\\d+"));
+			if (!numericLiteralLike)
+			{
+				error(DiagnosticCode.UNKNOWN_TYPE, site, name);
+			}
 			return null;
 		}
 		if (!isTypeAccessible(ts))
@@ -4799,6 +5491,32 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 				}
 			}
 
+			// Install default trait methods that weren't overridden by the implementor
+			for (var entry : traitType.getDefaultImpls().entrySet())
+			{
+				String methodName = entry.getKey();
+				if (targetScope.resolveLocal(methodName) == null)
+				{
+					Symbol traitMethod = traitType.getMemberScope().resolve(methodName);
+					if (traitMethod instanceof MethodSymbol tms)
+					{
+						FunctionType origFn = tms.getType();
+						List<Type> newParams = new ArrayList<>(origFn.parameterTypes);
+						if (!newParams.isEmpty() && newParams.get(0) instanceof TraitType)
+							newParams.set(0, targetType);
+						FunctionType newFn = new FunctionType(origFn.returnType, newParams, origFn.parameterInfo);
+						MethodSymbol copy = new MethodSymbol(methodName, newFn, tms.getModifiers(), false, entry.getValue(), tms.getTypeParameters());
+						copy.setTraitName(traitType.name());
+						targetScope.define(copy);
+						// Visit the default method body so references (like println)
+						// are resolved via the current scope chain.
+						Symbol prevSym = overrideNodeSymbol(entry.getValue(), copy);
+						visitMethodDeclaration(entry.getValue());
+						restoreNodeSymbol(entry.getValue(), prevSym);
+					}
+				}
+			}
+
 			// Now visit the bodies
 			for (MethodDeclaration method : node.members)
 			{
@@ -5036,6 +5754,12 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 			else
 			{
 				currentScope.addImport(ns);
+				// Also register the namespace under its short name so qualified access works
+				// e.g., "use std::math" allows both "abs()" and "math::abs()"
+				String shortName = ns.getName();
+				if (shortName.contains("::"))
+					shortName = shortName.substring(shortName.lastIndexOf("::") + 2);
+				currentScope.alias(shortName, ns);
 			}
 		}
 		else if (sym instanceof TypeSymbol ts)
@@ -5148,6 +5872,13 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 	// =========================================================================
 
 	@Override
+	public Type visitLambdaExpression(org.nebula.nebc.ast.expressions.LambdaExpression node)
+	{
+		// Lambda semantic analysis placeholder — full closure support is not yet implemented.
+		return Type.ANY;
+	}
+
+	@Override
 	public Type visitNoneExpression(NoneExpression node)
 	{
 		// 'none' is the absent value; its type is an optional wrapping any T.
@@ -5166,6 +5897,22 @@ public class SemanticAnalyzer implements ASTVisitor<Type>
 		{
 			// Strip optional wrapper — caller gets the inner T
 			Type result = ot.innerType;
+			recordType(node, result);
+			return result;
+		}
+		// Allow forced-unwrap on Result types (unwraps Ok value)
+		if (operandType instanceof UnionType ut && ut.name().startsWith("Result"))
+		{
+			// Result<T,E>! returns T — resolve from the Ok variant's type parameter
+			Symbol tSym = ut.getMemberScope().resolve("T");
+			Type result = (tSym != null) ? tSym.getType() : Type.ANY;
+			recordType(node, result);
+			return result;
+		}
+		if (operandType instanceof CompositeType ct && ct.name().startsWith("Result"))
+		{
+			Symbol tSym = ct.getMemberScope().resolve("T");
+			Type result = (tSym != null) ? tSym.getType() : Type.ANY;
 			recordType(node, result);
 			return result;
 		}

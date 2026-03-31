@@ -12,6 +12,8 @@ public class EnumType extends CompositeType
 	@Override
 	public boolean isAssignableTo(Type target)
 	{
-		return this.equals(target) || target == Type.ANY;
+		if (this.equals(target) || target == Type.ANY)
+			return true;
+		return super.isAssignableTo(target);
 	}
 }

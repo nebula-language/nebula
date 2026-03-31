@@ -205,7 +205,6 @@ public class Compiler
 			}
 
 			// Save IR to file for debugging
-			/* 
 			try (java.io.PrintWriter out = new java.io.PrintWriter("generated.ll"))
 			{
 				out.println(codegen.dumpIR());
@@ -214,7 +213,6 @@ public class Compiler
 			{
 				Log.err("Could not write IR to file: " + e.getMessage());
 			}
-			*/
 
 			// 6. Verify the module only after dumping it
 			codegen.verifyModule();

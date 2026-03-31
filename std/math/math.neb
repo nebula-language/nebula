@@ -1,0 +1,35 @@
+namespace std::math;
+
+// =============================================================================
+// std::math — Mathematical constants and functions
+// =============================================================================
+
+private extern "C"
+{
+    f64 __nebula_rt_math_sqrt(f64 x);
+    f64 __nebula_rt_math_abs(f64 x);
+    f64 __nebula_rt_math_pow(f64 base, f64 exp);
+    f64 __nebula_rt_math_floor(f64 x);
+    f64 __nebula_rt_math_ceil(f64 x);
+    f64 __nebula_rt_math_log(f64 x);
+    f64 __nebula_rt_math_min(f64 a, f64 b);
+    f64 __nebula_rt_math_max(f64 a, f64 b);
+}
+
+const f64 PI = 3.14159265358979;
+
+f64 sqrt(f64 x) => __nebula_rt_math_sqrt(x)
+
+f64 abs(f64 x) => __nebula_rt_math_abs(x)
+
+f64 pow(f64 base, f64 exp) => __nebula_rt_math_pow(base, exp)
+
+f64 floor(f64 x) => __nebula_rt_math_floor(x)
+
+f64 ceil(f64 x) => __nebula_rt_math_ceil(x)
+
+f64 log(f64 x) => __nebula_rt_math_log(x)
+
+f64 min(f64 a, f64 b) => __nebula_rt_math_min(a, b)
+
+f64 max(f64 a, f64 b) => __nebula_rt_math_max(a, b)

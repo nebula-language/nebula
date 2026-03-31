@@ -1,0 +1,107 @@
+fn main()
+{
+    let source = "void main() { println(\"Hello\"); }";
+
+    var lexer = Lexer{ source: source, pos: 0 };
+
+    while (true)
+    {
+        var tok = lexer.next_token();
+
+        if (tok == Token.EOF)
+        {
+            break;
+        }
+
+        println(tok);
+    }
+}
+
+enum Keyword
+{
+    Break,
+    Char,
+    Const,
+    Continue,
+    Else,
+    Enum,
+    Extern,
+    For,
+    Foreach,
+    If,
+    In,
+    Is,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+
+}
+
+enum Token {
+    Keyword(Keyword),
+    Identifier(str),
+    Number(str),
+    StringLiteral(str),
+
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    Semicolon,
+    
+    EOF,
+}
+
+struct Lexer
+{
+    str source,
+    u64 pos,
+}
+
+impl Lexer
+{
+    Token next_token(self)
+    {
+        self.skip_whitespace();
+
+        var c = self.peek();
+
+        match c {
+            '(' => { self.advance(); Token.LParen }
+            ')' => { self.advance(); Token.RParen }
+            '{' => { self.advance(); Token.LBrace }
+            '}' => { self.advance(); Token.RBrace }
+
+            '"' => self.read_string(),
+
+            c if is_alpha(c) => self.read_identifier(),
+            c if is_digit(c) => self.read_number(),
+
+            _ => {
+                self.advance();
+                self.next_token()
+            }
+        }
+    }
+
+    Token read_identifier(self)
+    {
+        var start = self.pos;
+
+        while is_alphanumeric(self.peek())
+        {
+            self.advance();
+        }
+
+        var text = self.source.slice(start, self.pos);
+        
+        match text {
+            "if" => Token::Keyword(Keyword::If),
+            "for" => Token::Keyword(Keyword::For),
+            "break" => Token::Keyword(Keyword::Break),
+            _ => Token::Identifier(text),
+        }
+    }
+}

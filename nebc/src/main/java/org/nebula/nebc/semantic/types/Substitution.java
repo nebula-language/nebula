@@ -110,10 +110,22 @@ public class Substitution
             if (cached != null)
                 return cached;
 
+            // Skip monomorphization when all bindings map to TypeParameterType
+            // (identity-like substitution).  Creating a snapshot composite in this
+            // situation loses members that haven't been defined yet (e.g. methods
+            // added later by impl blocks).
+            boolean allIdentity = mapping.values().stream()
+                .allMatch(v -> v instanceof TypeParameterType);
+            if (allIdentity)
+                return ct;
+
             // Only monomorphize if the composite actually references type parameters
-            // (in fields and/or method signatures) and we have a non-empty substitution mapping.
+            // (in fields, method signatures, or type parameter declarations) and we
+            // have a non-empty substitution mapping.
             boolean hasTypeParams = ct.getMemberScope().getSymbols().values().stream()
-                .anyMatch(s -> (s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs
+                .anyMatch(s -> (s instanceof org.nebula.nebc.semantic.symbol.TypeSymbol tts
+                        && tts.getType() instanceof TypeParameterType)
+                    || (s instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs
                         && referencesTypeParam(vs.getType()))
                     || (s instanceof org.nebula.nebc.semantic.symbol.MethodSymbol ms
                         && (referencesTypeParam(ms.getType().returnType)
@@ -132,42 +144,9 @@ public class Substitution
      */
     private CompositeType monomorphizeComposite(CompositeType ct)
     {
-        // Build the monomorphized name: e.g. "Pair<i32, str>", "Map<str,i32>"
-        // IMPORTANT: iterate type parameters in their DECLARATION ORDER (from the
-        // LinkedHashMap member scope), not HashMap.entrySet() order (which is random).
-        StringBuilder sb = new StringBuilder(extractBaseName(ct.name()));
-        sb.append("<");
-        boolean first = true;
-        for (org.nebula.nebc.semantic.symbol.Symbol sym : ct.getMemberScope().getSymbols().values())
-        {
-            if (sym instanceof org.nebula.nebc.semantic.symbol.TypeSymbol tts
-                    && tts.getType() instanceof TypeParameterType tpt)
-            {
-                // Look up the concrete type for this parameter in declaration order.
-                Type concrete = mapping.get(tpt);
-                if (concrete == null)
-                {
-                    // Fallback: name-based match for TypeParameterType instances
-                    // created in different scopes.
-                    for (Map.Entry<TypeParameterType, Type> entry : mapping.entrySet())
-                    {
-                        if (entry.getKey().name().equals(tpt.name()))
-                        {
-                            concrete = entry.getValue();
-                            break;
-                        }
-                    }
-                }
-                if (concrete != null)
-                {
-                    if (!first) sb.append(",");
-                    first = false;
-                    sb.append(concrete.name());
-                }
-            }
-        }
-        sb.append(">");
-        String monoName = sb.toString();
+        // Build the monomorphized name while preserving the source-level generic
+        // argument order for specialized composite references (e.g. Pair<B,A>).
+        String monoName = buildMonomorphizedCompositeName(ct);
 
         // Pre-create the result type and register it in the cache BEFORE iterating
         // over members so that self-referential types (e.g. "this" param in methods)
@@ -218,7 +197,20 @@ public class Substitution
                 monoMethod.setOverriddenMangledName(ms.getOverriddenMangledName());
                 monoType.getMemberScope().define(monoMethod);
             }
-            // TypeSymbol entries (type params) are omitted — they are fully resolved now
+            else if (sym instanceof org.nebula.nebc.semantic.symbol.TypeSymbol tts
+                && tts.getType() instanceof TypeParameterType tpt)
+            {
+                // Preserve type parameter entries when the substituted value is
+                // still a TypeParameterType.  This allows re-monomorphization
+                // of intermediate composites like Stack<T> → Stack<i32>.
+                Type substituted = substitute(tpt);
+                if (substituted instanceof TypeParameterType subTpt)
+                {
+                    monoType.getMemberScope().define(
+                        new org.nebula.nebc.semantic.symbol.TypeSymbol(
+                            subTpt.name(), subTpt, null));
+                }
+            }
         }
 
         // Add the monomorphized 'this' symbol so member-scope lookups work correctly.
@@ -227,6 +219,105 @@ public class Substitution
 
         monoCache.remove(ct.name());
         return monoType;
+    }
+
+    private String buildMonomorphizedCompositeName(CompositeType ct)
+    {
+        String ctName = ct.name();
+        int lt = ctName.indexOf('<');
+        int gt = ctName.lastIndexOf('>');
+
+        // If this composite was referenced with explicit generic arguments
+        // (e.g. Pair<B,A>), preserve that ordering during substitution.
+        if (lt >= 0 && gt > lt)
+        {
+            String base = ctName.substring(0, lt);
+            String argsRaw = ctName.substring(lt + 1, gt);
+            List<String> args = splitGenericArgs(argsRaw);
+
+            StringBuilder sb = new StringBuilder(base).append("<");
+            for (int i = 0; i < args.size(); i++)
+            {
+                String token = args.get(i).trim();
+                Type replacement = resolveMappedTypeByName(token);
+                if (i > 0)
+                    sb.append(",");
+                sb.append(replacement != null ? replacement.name() : token);
+            }
+            sb.append(">");
+            return sb.toString();
+        }
+
+        // Fallback: declaration-order type parameters.
+        StringBuilder sb = new StringBuilder(extractBaseName(ct.name()));
+        sb.append("<");
+        boolean first = true;
+        for (org.nebula.nebc.semantic.symbol.Symbol sym : ct.getMemberScope().getSymbols().values())
+        {
+            if (sym instanceof org.nebula.nebc.semantic.symbol.TypeSymbol tts
+                    && tts.getType() instanceof TypeParameterType tpt)
+            {
+                Type concrete = mapping.get(tpt);
+                if (concrete == null)
+                {
+                    for (Map.Entry<TypeParameterType, Type> entry : mapping.entrySet())
+                    {
+                        if (entry.getKey().name().equals(tpt.name()))
+                        {
+                            concrete = entry.getValue();
+                            break;
+                        }
+                    }
+                }
+                if (concrete != null)
+                {
+                    if (!first) sb.append(",");
+                    first = false;
+                    sb.append(concrete.name());
+                }
+            }
+        }
+        sb.append(">");
+        return sb.toString();
+    }
+
+    private Type resolveMappedTypeByName(String name)
+    {
+        for (Map.Entry<TypeParameterType, Type> entry : mapping.entrySet())
+        {
+            if (entry.getKey().name().equals(name))
+                return entry.getValue();
+        }
+        return null;
+    }
+
+    public static List<String> splitGenericArgs(String s)
+    {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        if (s == null || s.isBlank())
+            return out;
+
+        int depth = 0;
+        StringBuilder cur = new StringBuilder();
+        for (int i = 0; i < s.length(); i++)
+        {
+            char ch = s.charAt(i);
+            if (ch == '<')
+                depth++;
+            else if (ch == '>')
+                depth = Math.max(0, depth - 1);
+
+            if (ch == ',' && depth == 0)
+            {
+                out.add(cur.toString());
+                cur.setLength(0);
+                continue;
+            }
+            cur.append(ch);
+        }
+        if (cur.length() > 0)
+            out.add(cur.toString());
+        return out;
     }
 
     private static String extractBaseName(String name)

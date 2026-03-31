@@ -114,10 +114,15 @@ public class SymbolTable
 	 */
 	private Symbol resolve(String name, boolean useParent)
 	{
-		// Handle qualified names: ns::User  or  Enum::Variant
-		if (name.contains("::"))
+		// Handle qualified names: ns::User  or  Enum::Variant  or  Enum.Variant
+		if (name.contains("::") || name.contains("."))
 		{
-			String[] parts = name.split("::", 2);
+			// Prefer :: as separator; fall back to . if no :: present
+			String[] parts;
+			if (name.contains("::"))
+				parts = name.split("::", 2);
+			else
+				parts = name.split("\\.", 2);
 			Symbol prefix = resolve(parts[0], useParent);
 
 			if (prefix instanceof NamespaceSymbol ns)
@@ -127,8 +132,7 @@ public class SymbolTable
 			}
 			if (prefix instanceof TypeSymbol ts && ts.getType() instanceof org.nebula.nebc.semantic.types.CompositeType ct)
 			{
-				// Type-qualified: e.g. Enum::Variant, Union::Variant.
-				// Only search within the type's member scope, not its parent chain.
+				// Type-qualified: e.g. Enum::Variant, Union::Variant, Enum.Variant
 				return ct.getMemberScope().resolve(parts[1], false);
 			}
 			return null;

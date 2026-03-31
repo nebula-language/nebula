@@ -110,6 +110,65 @@ impl ArrayList<T>
     // Remove all elements.  Does not release the backing buffer.
     void clear() { this.count = 0; }
 
+    // Remove by value — removes first occurrence matching v.  Returns true if found.
+    bool remove(keeps T v)
+    {
+        i64? idx = this.indexOf(v);
+        if (idx == none) { return false; }
+        this.removeAt(idx!);
+        return true;
+    }
+
+    // Insert element at index, shifting everything after it right.
+    void insertAt(i64 index, T value)
+    {
+        if (index < 0 || index > this.count) { return; }
+        if (this.count == this.capacity) { this.grow(); }
+        i64 i = this.count;
+        while (i > index)
+        {
+            neb_ptr_store(this.data, i, neb_ptr_load(this.data, i - 1));
+            i -= 1;
+        }
+        neb_ptr_store(this.data, index, (Ref)value);
+        this.count += 1;
+    }
+
+    // Insertion sort — casts elements to i64 for comparison (works for integer types).
+    void sort()
+    {
+        i64 n = this.count;
+        i64 i = 1;
+        while (i < n)
+        {
+            Ref key = neb_ptr_load(this.data, i);
+            i64 keyVal = (i64)key;
+            i64 j = i - 1;
+            while (j >= 0 && (i64)neb_ptr_load(this.data, j) > keyVal)
+            {
+                neb_ptr_store(this.data, j + 1, neb_ptr_load(this.data, j));
+                j -= 1;
+            }
+            neb_ptr_store(this.data, j + 1, key);
+            i += 1;
+        }
+    }
+
+    // Return a new list with the first n elements.
+    ArrayList<T> take(i64 n)
+    {
+        var result = ArrayList<T>.new();
+        i64 limit = n;
+        if (limit > this.count) { limit = this.count; }
+        i64 i = 0;
+        while (i < limit)
+        {
+            result.add((T)neb_ptr_load(this.data, i));
+            i += 1;
+        }
+        return result;
+    }
+
     // ── Query ─────────────────────────────────────────────────────────────────
 
     // Return the element at index, or none when out of bounds.

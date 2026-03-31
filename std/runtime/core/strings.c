@@ -174,6 +174,30 @@ static uint8_t to_lower_byte(uint8_t c)
     return c;
 }
 
+static uint8_t to_upper_byte(uint8_t c)
+{
+    if (c >= 'a' && c <= 'z')
+        return c - ('a' - 'A');
+    return c;
+}
+
+NebulaStr neb_str_to_upper(NebulaStr s)
+{
+    if (s.len == 0)
+        return (NebulaStr){ (const uint8_t*)"", 0 };
+
+    uint8_t* buf = (uint8_t*)neb_alloc((size_t)(s.len + 1));
+    if (!buf)
+        return (NebulaStr){ (const uint8_t*)"", 0 };
+
+    for (int64_t i = 0; i < s.len; i++)
+    {
+        buf[i] = to_upper_byte(s.ptr[i]);
+    }
+    buf[s.len] = '\0';
+    return (NebulaStr){ buf, s.len };
+}
+
 NebulaStr neb_str_to_lower(NebulaStr s)
 {
     if (s.len == 0)
@@ -211,6 +235,19 @@ int32_t neb_str_equals_ignore_case(NebulaStr a, NebulaStr b)
             return 0;
     }
     return 1;
+}
+
+int32_t __nebula_rt_str_cmp(NebulaStr a, NebulaStr b)
+{
+    int64_t limit = a.len < b.len ? a.len : b.len;
+    for (int64_t i = 0; i < limit; i++)
+    {
+        if (a.ptr[i] < b.ptr[i]) return -1;
+        if (a.ptr[i] > b.ptr[i]) return 1;
+    }
+    if (a.len < b.len) return -1;
+    if (a.len > b.len) return 1;
+    return 0;
 }
 
 // =============================================================================

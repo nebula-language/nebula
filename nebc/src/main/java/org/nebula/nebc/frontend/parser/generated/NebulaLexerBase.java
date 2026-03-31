@@ -62,7 +62,7 @@ abstract class NebulaLexerBase extends Lexer
             boolean switchToFormatString = true;
             while ((char)_input.LA(ind) != '}')
             {
-                if (_input.LA(ind) == ':' || _input.LA(ind) == ')')
+                if (_input.LA(ind) == ':' || _input.LA(ind) == ')' || _input.LA(ind) == '{')
                 {
                     switchToFormatString = false;
                     break;

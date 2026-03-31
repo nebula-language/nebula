@@ -1,79 +1,135 @@
 namespace std::collections;
 
 // =============================================================================
-// std::collections::HashSet<T: Hashable> — unordered set
+// std::collections::Set<T: Hashable> — standalone unordered set
 // =============================================================================
 //
-// A set backed by a HashMap<T, bool>.  Membership tests, additions, and
-// removals are O(1) average.
-//
-// Usage
-// ─────
-//   var seen = HashSet<str>();
-//   seen.add("hello");
-//   if (seen.contains("hello")) { println("yep"); }
-//   seen.remove("hello");
+// This implementation is intentionally simple and self-contained so it does not
+// depend on HashMap internals while the collections stack is being stabilized.
+// Equality is based on Ref identity for Hashable values.
 
-type HashSet<T: Hashable>
+type Set<T: Hashable>
 {
-    private HashMap<T, bool> map;
+    private T[] items;
 }
 
-impl HashSet<T: Hashable>
+impl Set<T>
 {
-    // ── Construction ──────────────────────────────────────────────────────────
+    Set<T> new() => (items: [],)
 
-    HashSet<T> new() => (map: HashMap<T, bool>.new(),)
+    pub i64  size()    => this.items.length()
+    pub i64  length()  => this.items.length()
+    pub bool isEmpty() => this.items.length() == 0
 
-    // ── Size ─────────────────────────────────────────────────────────────────
-
-    i64  size()    => this.map.size()
-    bool isEmpty() => this.map.isEmpty()
-
-    // ── Mutation ──────────────────────────────────────────────────────────────
-
-    // Add value to the set.
-    // Returns true when newly inserted, false when already present.
-    bool add(T value)
+    private i64? findIndex(keeps T value)
     {
-        return match (this.map.put(value, true))
+        for (i64 i = 0; i < this.items.length(); i++)
         {
-            PutResult.Inserted    => true,
-            PutResult.Updated(_)  => false
-        };
+            if ((Ref)this.items[i] == (Ref)value)
+            {
+                return i;
+            }
+        }
+        return none;
     }
 
-    // Remove value from the set.
-    // Returns true when found and removed, false when absent.
-    bool remove(keeps T value)
+    pub bool contains(keeps T value) => this.findIndex(value) != none
+
+    pub bool add(T value)
     {
-        return match (this.map.remove(value))
+        if (this.contains(value))
         {
-            RemoveResult.Removed(_) => true,
-            RemoveResult.Missing    => false
-        };
+            return false;
+        }
+        this.items += [value];
+        return true;
     }
 
-    // Remove all elements.
-    void clear() => this.map.clear()
-
-    // ── Query ─────────────────────────────────────────────────────────────────
-
-    bool contains(keeps T value) => this.map.containsKey(value)
-
-    // ── Set algebra ───────────────────────────────────────────────────────────
-
-    // Return a new set that is the union of this and other.
-    HashSet<T> mergeWith(keeps HashSet<T> other)
+    pub bool remove(keeps T value)
     {
-        var merged = this.map.merge(other.map);
-        (map: merged,)
+        i64? idx = this.findIndex(value);
+        if (idx == none)
+        {
+            return false;
+        }
+
+        T[] next = [];
+        for (i64 i = 0; i < this.items.length(); i++)
+        {
+            if (i != idx!)
+            {
+                next += [this.items[i]];
+            }
+        }
+        this.items = next;
+        return true;
     }
 
-    // ── Operators ─────────────────────────────────────────────────────────────
+    pub void clear()
+    {
+        this.items = [];
+    }
 
-    HashSet<T> operator+(keeps HashSet<T> other) => this.mergeWith(other)
+    pub Set<T> union(keeps Set<T> other)
+    {
+        var out = Set<T>.new();
+        for (i64 i = 0; i < this.items.length(); i++)
+        {
+            out.add(this.items[i]);
+        }
+        for (i64 i = 0; i < other.items.length(); i++)
+        {
+            out.add(other.items[i]);
+        }
+        return out;
+    }
 
-    bool operator==(keeps HashSet<T> other) => this.map == other.map
-    bool operator!=(keeps HashSet<T> other) => !(this == other)
+    pub Set<T> intersect(keeps Set<T> other)
+    {
+        var out = Set<T>.new();
+        for (i64 i = 0; i < this.items.length(); i++)
+        {
+            T v = this.items[i];
+            if (other.contains(v))
+            {
+                out.add(v);
+            }
+        }
+        return out;
+    }
+
+    pub Set<T> difference(keeps Set<T> other)
+    {
+        var out = Set<T>.new();
+        for (i64 i = 0; i < this.items.length(); i++)
+        {
+            T v = this.items[i];
+            if (!other.contains(v))
+            {
+                out.add(v);
+            }
+        }
+        return out;
+    }
+
+    Set<T> operator+(keeps Set<T> other) => this.union(other)
+
+    bool operator==(keeps Set<T> other)
+    {
+        if (this.size() != other.size())
+        {
+            return false;
+        }
+
+        for (i64 i = 0; i < this.items.length(); i++)
+        {
+            if (!other.contains(this.items[i]))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool operator!=(keeps Set<T> other) => !(this == other)
 }

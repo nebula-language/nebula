@@ -22,16 +22,14 @@ DELIMITED_COMMENT           : '/*' .*? '*/'           -> channel(COMMENTS_CHANNE
 WHITESPACES                 : (Whitespace | NewLine)+ -> channel(HIDDEN);
 
 AS: 'as';
-ASYNC: 'async';
-AWAIT: 'await';
+BACKLINK: 'backlink';
+BOX_KW: 'Box';
 BOOL: 'bool';
 BREAK: 'break';
-CASE: 'case';
 CHAR: 'char';
 CONST: 'const';
 CONTINUE: 'continue';
 DECIMAL: 'decimal';
-DEFAULT: 'default';
 DROPS: 'drops';
 ELSE: 'else';
 ENUM: 'enum';
@@ -43,42 +41,44 @@ FOR: 'for';
 FOREACH: 'foreach';
 IF: 'if';
 IN: 'in';
+INOUT: 'inout';
 INT8: 'i8';
 INT16: 'i16';
 INT32: 'i32';
 INT64: 'i64';
-IMPORT: 'import';
+INT128: 'i128';
 IS: 'is';
 KEEPS: 'keeps';
+LET: 'let';
 MUTATES: 'mutates';
-BACKLINK: 'backlink';
 NAMESPACE: 'namespace';
 NONE: 'none';
 MATCH: 'match';
 OPERATOR: 'operator';
-PRIVATE: 'private';
-PROTECTED: 'protected';
-PUBLIC: 'public';
+PRIV: 'priv';
+PUB: 'pub';
 RETURN: 'return';
+SELF: 'self';
 STATIC: 'static';
-STRING: 'string';
+STR: 'str';
 TYPE: 'type';
-SWITCH: 'switch';
 TAG: 'tag';
 TAGGED: 'tagged';
-THIS: 'this';
 TRAIT: 'trait';
 TRUE: 'true';
 UINT8: 'u8';
 UINT16: 'u16';
 UINT32: 'u32';
 UINT64: 'u64';
+UINT128: 'u128';
 UNION: 'union';
 USE: 'use';
+VALUE: 'value';
 VAR: 'var';
 VOID: 'void';
 WHILE: 'while';
 IMPL: 'impl';
+PRIVATE: 'private';
 
 // Has to be defined before the IDENTIFIER rule, otherwise '_' gets matched as an IDENTIFIER
 UNDERSCORE: '_';
@@ -104,9 +104,9 @@ BIN_INTEGER_LITERAL
 	;
 
 REAL_LITERAL
-	: ([0-9] ('_'* [0-9])*) '.' [0-9] ('_'* [0-9])* ExponentPart? [FfDdMm]?
-	| [0-9] ('_'* [0-9])* ([FfDdMm] | ExponentPart [FfDdMm]?)
-	| '.' [0-9] ('_'* [0-9])* ExponentPart? [FfDdMm]
+	: ([0-9] ('_'* [0-9])*) '.' [0-9] ('_'* [0-9])* ExponentPart? FloatTypeSuffix?
+	| [0-9] ('_'* [0-9])* (FloatTypeSuffix | ExponentPart FloatTypeSuffix?)
+	| '.' [0-9] ('_'* [0-9])* ExponentPart? FloatTypeSuffix
 	;
 
 CHARACTER_LITERAL
@@ -190,7 +190,10 @@ OP_AND_ASSIGNMENT: '&=';
 OP_OR_ASSIGNMENT: '|=';
 OP_XOR_ASSIGNMENT: '^=';
 OP_LEFT_SHIFT_ASSIGNMENT: '<<=';
-OP_RANGE: '..';
+OP_RANGE_DESC_INC: '..>=';
+OP_RANGE_DESC_EX:  '..>';
+OP_RANGE_INC:      '..=';
+OP_RANGE:          '..';
 FAT_ARROW: '=>';
 
 
@@ -264,8 +267,20 @@ fragment NewLineCharacter
 	;
 
 fragment IntegerTypeSuffix
-	: [lL]? [uU]
-	| [uU]? [lL]
+	: 'u128' | 'i128'
+	| 'u64'  | 'i64'
+	| 'u32'  | 'i32'
+	| 'u16'  | 'i16'
+	| 'u8'   | 'i8'
+	| 'u'    | 'U'
+	| 'l'    | 'L'
+	| 'ul'   | 'lu'
+	| 'uL'   | 'Lu'
+	| 'Ul'   | 'lU'
+	| 'UL'   | 'LU'
+	;
+fragment FloatTypeSuffix
+	: [FfDdMm]
 	;
 fragment ExponentPart
 	: [eE] ('+' | '-')? [0-9] ('_'* [0-9])*

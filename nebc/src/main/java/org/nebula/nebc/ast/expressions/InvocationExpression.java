@@ -28,6 +28,9 @@ public class InvocationExpression extends Expression
 	 */
 	private List<Type> typeArguments;
 
+	/** Raw type-argument text from source, e.g. "u8" from {@code x.tryCast<u8>()}. Empty if none. */
+	public String rawTypeArgText = "";
+
 	public InvocationExpression(SourceSpan span, Expression target, List<Expression> arguments)
 	{
 		super(span);

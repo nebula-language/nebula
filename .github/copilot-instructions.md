@@ -32,6 +32,7 @@ Before writing any code:
 1. MUST read `./spec/Nebula_CVT_LUA_Specification.md` → Understand Nebula’s **core philosophy and paradigm**.
 2. MUST read `./spec/nebula_full_proof.neb` → Understand **all language features** (syntax + semantics).
 3. MUST validate that your implementation aligns with Nebula’s **intended direction and philosophy**.
+(Other nebula code in the environment isnt a guaranteed faithful source of truth, as it might not be up to date with the latest specification review)
 
 **Failure to follow this step is not allowed.**
 

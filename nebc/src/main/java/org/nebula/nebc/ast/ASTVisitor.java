@@ -92,6 +92,14 @@ public interface ASTVisitor<R>
     R visitConstructorDeclaration(ConstructorDeclaration node);
 
     /**
+     * @grammar var (x, y) = expr; — tuple destructuring
+     */
+    default R visitTupleDestructuringDeclaration(org.nebula.nebc.ast.declarations.TupleDestructuringDeclaration node)
+    {
+        return null;
+    }
+
+    /**
      * @grammar #[path] or #[path(args)]
      *
      * <p>Default no-op implementation: attribute nodes are embedded as metadata
@@ -260,6 +268,11 @@ public interface ASTVisitor<R>
      * @grammar none — absence literal for optional types.
      */
     R visitNoneExpression(org.nebula.nebc.ast.expressions.NoneExpression node);
+
+    /**
+     * @grammar |Type param, ...| => expr  or  |Type param, ...| { body }
+     */
+    R visitLambdaExpression(org.nebula.nebc.ast.expressions.LambdaExpression node);
 
     /**
      * @grammar expr! — forced unwrap of an optional; panics if absent.

@@ -104,25 +104,48 @@ NebulaStr __nebula_rt_i64_to_str(int64_t v) {
  * The format spec is passed as a NebulaStr.
  */
 NebulaStr __nebula_rt_i64_to_str_fmt(int64_t v, NebulaStr fmt) {
-    // Convert the integer to a plain decimal string first.
+    // Check for hex format specifier (trailing 'X' or 'x').
+    int hex_mode = 0;  // 0 = decimal, 1 = uppercase hex, 2 = lowercase hex
+    int64_t fmt_len = fmt.len;
+    if (fmt_len > 0) {
+        uint8_t last = fmt.ptr[fmt_len - 1];
+        if (last == 'X') { hex_mode = 1; fmt_len--; }
+        else if (last == 'x') { hex_mode = 2; fmt_len--; }
+    }
+
+    // Convert the integer to string.
     char digits[32];
     int dlen = 0;
     int is_neg = 0;
 
-    if (v == 0) {
-        digits[dlen++] = '0';
+    if (hex_mode) {
+        uint64_t uv = (uint64_t)v;
+        if (uv == 0) {
+            digits[dlen++] = '0';
+        } else {
+            const char* hex_chars = (hex_mode == 1) ? "0123456789ABCDEF" : "0123456789abcdef";
+            while (uv != 0) {
+                digits[dlen++] = hex_chars[uv & 0xF];
+                uv >>= 4;
+            }
+            reverse_str(digits, dlen);
+        }
     } else {
-        int64_t tmp_v = v;
-        if (tmp_v < 0) {
-            is_neg = 1;
-            tmp_v = -tmp_v;
+        if (v == 0) {
+            digits[dlen++] = '0';
+        } else {
+            int64_t tmp_v = v;
+            if (tmp_v < 0) {
+                is_neg = 1;
+                tmp_v = -tmp_v;
+            }
+            while (tmp_v != 0) {
+                digits[dlen++] = (tmp_v % 10) + '0';
+                tmp_v /= 10;
+            }
+            if (is_neg) digits[dlen++] = '-';
+            reverse_str(digits, dlen);
         }
-        while (tmp_v != 0) {
-            digits[dlen++] = (tmp_v % 10) + '0';
-            tmp_v /= 10;
-        }
-        if (is_neg) digits[dlen++] = '-';
-        reverse_str(digits, dlen);
     }
     digits[dlen] = '\0';
 
@@ -130,25 +153,27 @@ NebulaStr __nebula_rt_i64_to_str_fmt(int64_t v, NebulaStr fmt) {
     char pad_char = ' ';
     int width = 0;
 
-    if (fmt.len > 0) {
-        // If every character is '0', use zero-padding; width = number of '0's.
-        // If characters are '#', use space-padding; width = number of '#'s.
-        // Otherwise try to parse as a plain integer width.
+    if (fmt_len > 0) {
         int all_zeros = 1;
         int all_hashes = 1;
-        for (int64_t i = 0; i < fmt.len; i++) {
+        for (int64_t i = 0; i < fmt_len; i++) {
             if (fmt.ptr[i] != '0') all_zeros = 0;
             if (fmt.ptr[i] != '#') all_hashes = 0;
         }
         if (all_zeros) {
             pad_char = '0';
-            width = (int)fmt.len;
+            width = (int)fmt_len;
         } else if (all_hashes) {
             pad_char = ' ';
-            width = (int)fmt.len;
+            width = (int)fmt_len;
         } else {
-            // Parse as integer width
-            for (int64_t i = 0; i < fmt.len; i++) {
+            // Parse leading '0' as pad char, then digits as width.
+            int64_t start = 0;
+            if (fmt.ptr[0] == '0' && fmt_len > 1) {
+                pad_char = '0';
+                start = 1;
+            }
+            for (int64_t i = start; i < fmt_len; i++) {
                 uint8_t c = fmt.ptr[i];
                 if (c >= '0' && c <= '9')
                     width = width * 10 + (c - '0');
@@ -245,6 +270,19 @@ NebulaStr __nebula_rt_f64_to_str(double v) {
     }
     
     tmp[i] = '\0';
+
+    // Trim trailing zeros after decimal point
+    int dot_pos = -1;
+    for (int k = 0; k < i; k++) {
+        if (tmp[k] == '.') { dot_pos = k; break; }
+    }
+    if (dot_pos >= 0) {
+        while (i > dot_pos + 1 && tmp[i-1] == '0') i--;
+        // If all decimal digits trimmed, remove the dot too
+        if (i == dot_pos + 1) i--;
+        tmp[i] = '\0';
+    }
+
     uint8_t* buf = (uint8_t*)neb_alloc((uint64_t)(i + 1));
     if (!buf) return (NebulaStr){ (const uint8_t*)"", 0 };
     for (int k = 0; k <= i; k++) buf[k] = (uint8_t)tmp[k];

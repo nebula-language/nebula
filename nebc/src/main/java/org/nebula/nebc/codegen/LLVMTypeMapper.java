@@ -126,6 +126,8 @@ public final class LLVMTypeMapper
 			return LLVMInt32TypeInContext(ctx);
 		if (pt == PrimitiveType.I64 || pt == PrimitiveType.U64)
 			return LLVMInt64TypeInContext(ctx);
+		if (pt == PrimitiveType.I128 || pt == PrimitiveType.U128)
+			return LLVMIntTypeInContext(ctx, 128);
 
 		if (pt == PrimitiveType.F32)
 			return LLVMFloatTypeInContext(ctx);
@@ -220,10 +222,16 @@ public final class LLVMTypeMapper
 		for (int i = 0; i < fields.size(); i++)
 		{
 			Type fieldType = fields.get(i).getType();
+			// Dynamic array fields (T[]) are stored as { ptr, i64 } so that
+			// the element count is kept alongside the data pointer.
+			if (fieldType instanceof ArrayType at && at.elementCount == 0)
+			{
+				fieldTypesArr[i] = getDynArrayStructType(ctx);
+			}
 			// Struct fields that are other struct types must be stored inline (value
 			// semantics), not as opaque pointers. map() returns ptr for composites,
 			// so value-like composite fields need the concrete named struct layout.
-			if (fieldType instanceof org.nebula.nebc.semantic.types.StructType fieldSt)
+			else if (fieldType instanceof org.nebula.nebc.semantic.types.StructType fieldSt)
 			{
 				fieldTypesArr[i] = getOrCreateStructType(ctx, fieldSt);
 			}
@@ -249,6 +257,24 @@ public final class LLVMTypeMapper
 	public static void clearCache()
 	{
 		structTypes.clear();
+		recursiveUnionNames.clear();
+	}
+
+	/**
+	 * Returns the LLVM struct type {@code { ptr, i64 }} used to represent dynamic
+	 * arrays inside composite-type fields.  The data pointer lives at index 0 and
+	 * the element count at index 1.
+	 */
+	public static LLVMTypeRef getDynArrayStructType(LLVMContextRef ctx)
+	{
+		String key = "__dyn_arr";
+		if (structTypes.containsKey(key))
+			return structTypes.get(key);
+		LLVMTypeRef[] fields = {LLVMPointerTypeInContext(ctx, 0), LLVMInt64TypeInContext(ctx)};
+		LLVMTypeRef st = LLVMStructCreateNamed(ctx, key);
+		LLVMStructSetBody(st, new PointerPointer<>(fields), 2, 0);
+		structTypes.put(key, st);
+		return st;
 	}
 
 
@@ -280,8 +306,64 @@ public final class LLVMTypeMapper
 	 * Tagged-union IR layout: {@code { i32 tag, [PAYLOAD_BYTES x i8] payload }}.
 	 * The payload region is dynamically sized to hold the widest variant payload.
 	 * Variant-specific accessor structs use bitcasting at the call-site.
+	 * Recursive unions use {@code { i32 tag, ptr payload }} instead.
 	 */
 	public static final int UNION_MIN_PAYLOAD_BYTES = 16; // minimum: big enough for str {i8*,i64}
+
+	/** Union types that use heap-allocated (ptr) payload due to recursive self-reference. */
+	private static final java.util.Set<String> recursiveUnionNames = new java.util.HashSet<>();
+
+	/** Returns true if the union was registered as recursive. */
+	public static boolean isRecursiveUnion(UnionType ut)
+	{
+		String baseName = ut.name();
+		int lt = baseName.indexOf('<');
+		if (lt >= 0) baseName = baseName.substring(0, lt);
+		return recursiveUnionNames.contains(baseName);
+	}
+
+	/**
+	 * Returns true if {@code type} directly or transitively contains {@code unionName}
+	 * (i.e., a field / payload of the same union type).
+	 * A {@code checking} set prevents infinite recursion.
+	 */
+	private static boolean typeContainsUnion(Type type, String unionName, java.util.Set<String> checking)
+	{
+		if (type instanceof UnionType ut)
+		{
+			String n = ut.name();
+			int lt = n.indexOf('<');
+			if (lt >= 0) n = n.substring(0, lt);
+			if (n.equals(unionName)) return true;
+			if (!checking.add(n)) return false;
+			for (var sym : ut.getMemberScope().getSymbols().values())
+			{
+				if (sym instanceof org.nebula.nebc.semantic.symbol.MethodSymbol ms)
+				{
+					for (Type p : ms.getType().parameterTypes)
+						if (typeContainsUnion(p, unionName, checking)) return true;
+				}
+			}
+			return false;
+		}
+		if (type instanceof TupleType tt)
+		{
+			for (Type e : tt.elementTypes)
+				if (typeContainsUnion(e, unionName, checking)) return true;
+			return false;
+		}
+		if (type instanceof org.nebula.nebc.semantic.types.StructType st)
+		{
+			if (!checking.add(st.name())) return false;
+			for (var sym : st.getMemberScope().getSymbols().values())
+			{
+				if (sym instanceof org.nebula.nebc.semantic.symbol.VariableSymbol vs)
+					if (typeContainsUnion(vs.getType(), unionName, checking)) return true;
+			}
+			return false;
+		}
+		return false;
+	}
 
 	public static LLVMTypeRef getOrCreateUnionStructType(LLVMContextRef ctx, UnionType ut)
 	{
@@ -299,6 +381,36 @@ public final class LLVMTypeMapper
 
 		LLVMTypeRef structType = LLVMStructCreateNamed(ctx, key);
 		structTypes.put(key, structType); // register early to break recursion
+
+		// Detect self-referential (recursive) unions: check if any variant payload
+		// contains this union type. Recursive unions use { i32, ptr } layout.
+		boolean isRecursive = false;
+		for (var entry : ut.getMemberScope().getSymbols().entrySet())
+		{
+			if (entry.getValue() instanceof org.nebula.nebc.semantic.symbol.MethodSymbol ms)
+			{
+				for (Type pt : ms.getType().parameterTypes)
+				{
+					if (typeContainsUnion(pt, baseName, new java.util.HashSet<>()))
+					{
+						isRecursive = true;
+						break;
+					}
+				}
+				if (isRecursive) break;
+			}
+		}
+
+		if (isRecursive)
+		{
+			// Recursive union: { i32 tag, ptr heapPayload }
+			recursiveUnionNames.add(baseName);
+			LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx);
+			LLVMTypeRef ptrT = LLVMPointerTypeInContext(ctx, 0);
+			LLVMTypeRef[] fields = {i32t, ptrT};
+			LLVMStructSetBody(structType, new PointerPointer<>(fields), 2, 0);
+			return structType;
+		}
 
 		// Compute the maximum payload size from the variant constructors.
 		int maxPayload = UNION_MIN_PAYLOAD_BYTES;
@@ -339,6 +451,7 @@ public final class LLVMTypeMapper
 			if (pt == PrimitiveType.I16 || pt == PrimitiveType.U16 || pt == PrimitiveType.CHAR) return 2;
 			if (pt == PrimitiveType.I32 || pt == PrimitiveType.U32 || pt == PrimitiveType.F32) return 4;
 			if (pt == PrimitiveType.I64 || pt == PrimitiveType.U64 || pt == PrimitiveType.F64) return 8;
+			if (pt == PrimitiveType.I128 || pt == PrimitiveType.U128) return 16;
 			if (pt == PrimitiveType.STR) return 16; // { ptr, i64 }
 		}
 		if (type instanceof EnumType) return 4;
@@ -449,11 +562,17 @@ public final class LLVMTypeMapper
 		java.util.List<LLVMTypeRef> expanded = new java.util.ArrayList<>();
 		for (int i = 0; i < paramCount; i++)
 		{
+			if (ft.parameterTypes.get(i) == PrimitiveType.VOID)
+				continue;
 			expanded.add(map(ctx, ft.parameterTypes.get(i)));
 			if (ft.parameterTypes.get(i) instanceof ArrayType at && at.elementCount == 0)
 			{
 				expanded.add(LLVMInt64TypeInContext(ctx));
 			}
+		}
+		if (expanded.isEmpty())
+		{
+			return LLVMFunctionType(returnType, new LLVMTypeRef(), 0, /* isVarArg */ 0);
 		}
 		int llvmCount = expanded.size();
 		PointerPointer<LLVMTypeRef> paramTypes = new PointerPointer<>(llvmCount);
@@ -486,12 +605,21 @@ public final class LLVMTypeMapper
 		{
 			return LLVMFunctionType(returnType, new LLVMTypeRef(), 0, /* isVarArg */ 0);
 		}
-		PointerPointer<LLVMTypeRef> paramTypes = new PointerPointer<>(paramCount);
+		java.util.List<LLVMTypeRef> loweredParams = new java.util.ArrayList<>();
 		for (int i = 0; i < paramCount; i++)
 		{
-			paramTypes.put(i, externCLower(ctx, ft.parameterTypes.get(i)));
+			if (ft.parameterTypes.get(i) == PrimitiveType.VOID)
+				continue;
+			loweredParams.add(externCLower(ctx, ft.parameterTypes.get(i)));
 		}
-		return LLVMFunctionType(returnType, paramTypes, paramCount, /* isVarArg */ 0);
+		if (loweredParams.isEmpty())
+		{
+			return LLVMFunctionType(returnType, new LLVMTypeRef(), 0, /* isVarArg */ 0);
+		}
+		PointerPointer<LLVMTypeRef> paramTypes = new PointerPointer<>(loweredParams.size());
+		for (int i = 0; i < loweredParams.size(); i++)
+			paramTypes.put(i, loweredParams.get(i));
+		return LLVMFunctionType(returnType, paramTypes, loweredParams.size(), /* isVarArg */ 0);
 	}
 
 	/**

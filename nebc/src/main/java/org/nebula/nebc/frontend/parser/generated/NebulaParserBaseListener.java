@@ -199,13 +199,73 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterEnum_block(NebulaParser.Enum_blockContext ctx) { }
+	@Override public void enterEnum_body(NebulaParser.Enum_bodyContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void exitEnum_block(NebulaParser.Enum_blockContext ctx) { }
+	@Override public void exitEnum_body(NebulaParser.Enum_bodyContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterEnum_variant(NebulaParser.Enum_variantContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitEnum_variant(NebulaParser.Enum_variantContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterEnum_payload_list(NebulaParser.Enum_payload_listContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitEnum_payload_list(NebulaParser.Enum_payload_listContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterEnum_payload_item(NebulaParser.Enum_payload_itemContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitEnum_payload_item(NebulaParser.Enum_payload_itemContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterField_ident(NebulaParser.Field_identContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitField_ident(NebulaParser.Field_identContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterPlain_ident(NebulaParser.Plain_identContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitPlain_ident(NebulaParser.Plain_identContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -223,6 +283,18 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterLet_declaration(NebulaParser.Let_declarationContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitLet_declaration(NebulaParser.Let_declarationContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterStatement(NebulaParser.StatementContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -230,6 +302,30 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitStatement(NebulaParser.StatementContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterMatch_statement(NebulaParser.Match_statementContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitMatch_statement(NebulaParser.Match_statementContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterLabeled_statement(NebulaParser.Labeled_statementContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitLabeled_statement(NebulaParser.Labeled_statementContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -307,18 +403,6 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterBlock_tail(NebulaParser.Block_tailContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitBlock_tail(NebulaParser.Block_tailContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
 	@Override public void enterIf_expression(NebulaParser.If_expressionContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -362,6 +446,18 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitFor_statement(NebulaParser.For_statementContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterRange_for_control(NebulaParser.Range_for_controlContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitRange_for_control(NebulaParser.Range_for_controlContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -439,6 +535,30 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterForeach_binding(NebulaParser.Foreach_bindingContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitForeach_binding(NebulaParser.Foreach_bindingContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterForeach_tuple_elem(NebulaParser.Foreach_tuple_elemContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitForeach_tuple_elem(NebulaParser.Foreach_tuple_elemContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterReturn_statement(NebulaParser.Return_statementContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -487,73 +607,61 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterPattern_or(NebulaParser.Pattern_orContext ctx) { }
+	@Override public void enterType_binding_pattern(NebulaParser.Type_binding_patternContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void exitPattern_or(NebulaParser.Pattern_orContext ctx) { }
+	@Override public void exitType_binding_pattern(NebulaParser.Type_binding_patternContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterPattern_atom(NebulaParser.Pattern_atomContext ctx) { }
+	@Override public void enterSimple_pattern_type(NebulaParser.Simple_pattern_typeContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void exitPattern_atom(NebulaParser.Pattern_atomContext ctx) { }
+	@Override public void exitSimple_pattern_type(NebulaParser.Simple_pattern_typeContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterDestructuring_pattern(NebulaParser.Destructuring_patternContext ctx) { }
+	@Override public void enterVariant_pattern(NebulaParser.Variant_patternContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void exitDestructuring_pattern(NebulaParser.Destructuring_patternContext ctx) { }
+	@Override public void exitVariant_pattern(NebulaParser.Variant_patternContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterBinding_list(NebulaParser.Binding_listContext ctx) { }
+	@Override public void enterVariant_pattern_arg(NebulaParser.Variant_pattern_argContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void exitBinding_list(NebulaParser.Binding_listContext ctx) { }
+	@Override public void exitVariant_pattern_arg(NebulaParser.Variant_pattern_argContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void enterTuple_pattern(NebulaParser.Tuple_patternContext ctx) { }
+	@Override public void enterTuple_pattern_elem(NebulaParser.Tuple_pattern_elemContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
-	@Override public void exitTuple_pattern(NebulaParser.Tuple_patternContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void enterParenthesized_pattern(NebulaParser.Parenthesized_patternContext ctx) { }
-	/**
-	 * {@inheritDoc}
-	 *
-	 * <p>The default implementation does nothing.</p>
-	 */
-	@Override public void exitParenthesized_pattern(NebulaParser.Parenthesized_patternContext ctx) { }
+	@Override public void exitTuple_pattern_elem(NebulaParser.Tuple_pattern_elemContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -602,6 +710,18 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitVariable_declaration(NebulaParser.Variable_declarationContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterTuple_decl_elem(NebulaParser.Tuple_decl_elemContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitTuple_decl_elem(NebulaParser.Tuple_decl_elemContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -835,6 +955,18 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterTrait_supers(NebulaParser.Trait_supersContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitTrait_supers(NebulaParser.Trait_supersContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterTrait_body(NebulaParser.Trait_bodyContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -926,6 +1058,18 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitImpl_declaration(NebulaParser.Impl_declarationContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterType_with_params(NebulaParser.Type_with_paramsContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitType_with_params(NebulaParser.Type_with_paramsContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -1111,6 +1255,18 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterConstraint_list(NebulaParser.Constraint_listContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitConstraint_list(NebulaParser.Constraint_listContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterConstraint(NebulaParser.ConstraintContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1142,6 +1298,18 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitType_argument_list(NebulaParser.Type_argument_listContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterType_or_const_arg(NebulaParser.Type_or_const_argContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitType_or_const_arg(NebulaParser.Type_or_const_argContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -1219,6 +1387,18 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 *
 	 * <p>The default implementation does nothing.</p>
 	 */
+	@Override public void enterTernary_expression(NebulaParser.Ternary_expressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitTernary_expression(NebulaParser.Ternary_expressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
 	@Override public void enterNull_coalescing_expression(NebulaParser.Null_coalescing_expressionContext ctx) { }
 	/**
 	 * {@inheritDoc}
@@ -1226,6 +1406,30 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitNull_coalescing_expression(NebulaParser.Null_coalescing_expressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterRange_expression(NebulaParser.Range_expressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitRange_expression(NebulaParser.Range_expressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterRange_operator(NebulaParser.Range_operatorContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitRange_operator(NebulaParser.Range_operatorContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *
@@ -1442,6 +1646,54 @@ public class NebulaParserBaseListener implements NebulaParserListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitPrimary_expression_start(NebulaParser.Primary_expression_startContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterStruct_literal_expression(NebulaParser.Struct_literal_expressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitStruct_literal_expression(NebulaParser.Struct_literal_expressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterStruct_field_init(NebulaParser.Struct_field_initContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitStruct_field_init(NebulaParser.Struct_field_initContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterLambda_expression(NebulaParser.Lambda_expressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitLambda_expression(NebulaParser.Lambda_expressionContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterLambda_param(NebulaParser.Lambda_paramContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitLambda_param(NebulaParser.Lambda_paramContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *

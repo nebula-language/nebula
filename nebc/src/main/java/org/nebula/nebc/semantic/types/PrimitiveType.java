@@ -18,6 +18,8 @@ public class PrimitiveType extends Type
 	public static final PrimitiveType U32 = new PrimitiveType("u32");
 	public static final PrimitiveType I64 = new PrimitiveType("i64");
 	public static final PrimitiveType U64 = new PrimitiveType("u64");
+	public static final PrimitiveType I128 = new PrimitiveType("i128");
+	public static final PrimitiveType U128 = new PrimitiveType("u128");
 	public static final PrimitiveType F32 = new PrimitiveType("f32");
 	public static final PrimitiveType F64 = new PrimitiveType("f64");
 	public static final PrimitiveType BOOL = new PrimitiveType("bool");
@@ -65,6 +67,8 @@ public class PrimitiveType extends Type
 		scope.define(TypeSymbol.builtIn("u16", U16));
 		scope.define(TypeSymbol.builtIn("u32", U32));
 		scope.define(TypeSymbol.builtIn("u64", U64));
+		scope.define(TypeSymbol.builtIn("i128", I128));
+		scope.define(TypeSymbol.builtIn("u128", U128));
 
 		scope.define(TypeSymbol.builtIn("f32", F32));
 		scope.define(TypeSymbol.builtIn("f64", F64));
@@ -103,21 +107,9 @@ public class PrimitiveType extends Type
 		{
 			if (this.isInteger() && pTarget.isInteger())
 			{
-				// Signed to unsigned: only if they are the same type (already handled by
-				// equals)
-				// or if it's a widening conversion between SAME signedness.
-				boolean thisSigned = this.name.startsWith("i");
-				boolean targetSigned = pTarget.name.startsWith("i");
-
-				if (thisSigned != targetSigned)
-				{
-					// Allow widening even if signedness differs.
-					// LLVMCodeGenerator.emitCast handles this using SExt if source is signed,
-					// or ZExt if source is unsigned.
-					return this.getBitWidth() <= pTarget.getBitWidth();
-				}
-
-				return this.getBitWidth() <= pTarget.getBitWidth();
+				// Allow all integer conversions (widening and narrowing) at the SA level.
+				// The codegen will emit appropriate truncation or extension instructions.
+				return true;
 			}
 			else if (this.isFloat() && pTarget.isFloat())
 			{
@@ -135,7 +127,7 @@ public class PrimitiveType extends Type
 
 	public boolean isInteger()
 	{
-		return this == I8 || this == U8 || this == I16 || this == U16 || this == I32 || this == U32 || this == I64 || this == U64;
+		return this == I8 || this == U8 || this == I16 || this == U16 || this == I32 || this == U32 || this == I64 || this == U64 || this == I128 || this == U128;
 	}
 
 	public boolean isFloat()
@@ -151,6 +143,7 @@ public class PrimitiveType extends Type
 			case "i16", "u16" -> 16;
 			case "i32", "u32", "f32" -> 32;
 			case "i64", "u64", "f64", "str" -> 64;
+			case "i128", "u128" -> 128;
 			case "cstr", "Ref" -> 64; // pointer-sized on 64-bit platforms
 			default -> 0;
 		};
@@ -173,6 +166,8 @@ public class PrimitiveType extends Type
 			case "u32" -> U32;
 			case "i64" -> I64;
 			case "u64" -> U64;
+			case "i128" -> I128;
+			case "u128" -> U128;
 			case "f32" -> F32;
 			case "f64" -> F64;
 			case "bool" -> BOOL;

@@ -103,11 +103,41 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitEnum_declaration(NebulaParser.Enum_declarationContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#enum_block}.
+	 * Visit a parse tree produced by {@link NebulaParser#enum_body}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	T visitEnum_block(NebulaParser.Enum_blockContext ctx);
+	T visitEnum_body(NebulaParser.Enum_bodyContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#enum_variant}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitEnum_variant(NebulaParser.Enum_variantContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#enum_payload_list}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitEnum_payload_list(NebulaParser.Enum_payload_listContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#enum_payload_item}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitEnum_payload_item(NebulaParser.Enum_payload_itemContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#field_ident}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitField_ident(NebulaParser.Field_identContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#plain_ident}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitPlain_ident(NebulaParser.Plain_identContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#top_level_declaration}.
 	 * @param ctx the parse tree
@@ -115,11 +145,29 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitTop_level_declaration(NebulaParser.Top_level_declarationContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link NebulaParser#let_declaration}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitLet_declaration(NebulaParser.Let_declarationContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link NebulaParser#statement}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
 	T visitStatement(NebulaParser.StatementContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#match_statement}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitMatch_statement(NebulaParser.Match_statementContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#labeled_statement}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitLabeled_statement(NebulaParser.Labeled_statementContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#break_statement}.
 	 * @param ctx the parse tree
@@ -157,12 +205,6 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitBlock_statements(NebulaParser.Block_statementsContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#block_tail}.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	T visitBlock_tail(NebulaParser.Block_tailContext ctx);
-	/**
 	 * Visit a parse tree produced by {@link NebulaParser#if_expression}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -186,6 +228,12 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitFor_statement(NebulaParser.For_statementContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#range_for_control}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitRange_for_control(NebulaParser.Range_for_controlContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#traditional_for_control}.
 	 * @param ctx the parse tree
@@ -223,6 +271,18 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitForeach_control(NebulaParser.Foreach_controlContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link NebulaParser#foreach_binding}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitForeach_binding(NebulaParser.Foreach_bindingContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#foreach_tuple_elem}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitForeach_tuple_elem(NebulaParser.Foreach_tuple_elemContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link NebulaParser#return_statement}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -247,41 +307,35 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitPattern(NebulaParser.PatternContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#pattern_or}.
+	 * Visit a parse tree produced by {@link NebulaParser#type_binding_pattern}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	T visitPattern_or(NebulaParser.Pattern_orContext ctx);
+	T visitType_binding_pattern(NebulaParser.Type_binding_patternContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#pattern_atom}.
+	 * Visit a parse tree produced by {@link NebulaParser#simple_pattern_type}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	T visitPattern_atom(NebulaParser.Pattern_atomContext ctx);
+	T visitSimple_pattern_type(NebulaParser.Simple_pattern_typeContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#destructuring_pattern}.
+	 * Visit a parse tree produced by {@link NebulaParser#variant_pattern}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	T visitDestructuring_pattern(NebulaParser.Destructuring_patternContext ctx);
+	T visitVariant_pattern(NebulaParser.Variant_patternContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#binding_list}.
+	 * Visit a parse tree produced by {@link NebulaParser#variant_pattern_arg}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	T visitBinding_list(NebulaParser.Binding_listContext ctx);
+	T visitVariant_pattern_arg(NebulaParser.Variant_pattern_argContext ctx);
 	/**
-	 * Visit a parse tree produced by {@link NebulaParser#tuple_pattern}.
+	 * Visit a parse tree produced by {@link NebulaParser#tuple_pattern_elem}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
-	T visitTuple_pattern(NebulaParser.Tuple_patternContext ctx);
-	/**
-	 * Visit a parse tree produced by {@link NebulaParser#parenthesized_pattern}.
-	 * @param ctx the parse tree
-	 * @return the visitor result
-	 */
-	T visitParenthesized_pattern(NebulaParser.Parenthesized_patternContext ctx);
+	T visitTuple_pattern_elem(NebulaParser.Tuple_pattern_elemContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#attribute}.
 	 * @param ctx the parse tree
@@ -306,6 +360,12 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitVariable_declaration(NebulaParser.Variable_declarationContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#tuple_decl_elem}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitTuple_decl_elem(NebulaParser.Tuple_decl_elemContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#visibility_modifier}.
 	 * @param ctx the parse tree
@@ -421,6 +481,12 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitTrait_declaration(NebulaParser.Trait_declarationContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link NebulaParser#trait_supers}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitTrait_supers(NebulaParser.Trait_supersContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link NebulaParser#trait_body}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -468,6 +534,12 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitImpl_declaration(NebulaParser.Impl_declarationContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#type_with_params}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitType_with_params(NebulaParser.Type_with_paramsContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#impl_block}.
 	 * @param ctx the parse tree
@@ -559,6 +631,12 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitGeneric_parameter(NebulaParser.Generic_parameterContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link NebulaParser#constraint_list}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitConstraint_list(NebulaParser.Constraint_listContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link NebulaParser#constraint}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
@@ -576,6 +654,12 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitType_argument_list(NebulaParser.Type_argument_listContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#type_or_const_arg}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitType_or_const_arg(NebulaParser.Type_or_const_argContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#nested_gt}.
 	 * @param ctx the parse tree
@@ -613,11 +697,29 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 */
 	T visitAssignment_expression(NebulaParser.Assignment_expressionContext ctx);
 	/**
+	 * Visit a parse tree produced by {@link NebulaParser#ternary_expression}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitTernary_expression(NebulaParser.Ternary_expressionContext ctx);
+	/**
 	 * Visit a parse tree produced by {@link NebulaParser#null_coalescing_expression}.
 	 * @param ctx the parse tree
 	 * @return the visitor result
 	 */
 	T visitNull_coalescing_expression(NebulaParser.Null_coalescing_expressionContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#range_expression}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitRange_expression(NebulaParser.Range_expressionContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#range_operator}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitRange_operator(NebulaParser.Range_operatorContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#assignment_operator}.
 	 * @param ctx the parse tree
@@ -726,6 +828,30 @@ public interface NebulaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitPrimary_expression_start(NebulaParser.Primary_expression_startContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#struct_literal_expression}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitStruct_literal_expression(NebulaParser.Struct_literal_expressionContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#struct_field_init}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitStruct_field_init(NebulaParser.Struct_field_initContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#lambda_expression}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitLambda_expression(NebulaParser.Lambda_expressionContext ctx);
+	/**
+	 * Visit a parse tree produced by {@link NebulaParser#lambda_param}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitLambda_param(NebulaParser.Lambda_paramContext ctx);
 	/**
 	 * Visit a parse tree produced by {@link NebulaParser#postfix_operator}.
 	 * @param ctx the parse tree

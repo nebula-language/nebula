@@ -43,7 +43,7 @@ public abstract sealed class Symbol permits VariableSymbol, MethodSymbol, TypeSy
 
 	private final String name;
 	private final Type type;
-	private final ASTNode declarationNode; // nullable for built-ins
+	private ASTNode declarationNode; // nullable for built-ins
 	protected SymbolTable definedIn;
 	private List<AttributeInfo> attributes = Collections.emptyList();
 
@@ -52,6 +52,11 @@ public abstract sealed class Symbol permits VariableSymbol, MethodSymbol, TypeSy
 		this.name = name;
 		this.type = type;
 		this.declarationNode = declarationNode;
+	}
+
+	public void setDeclarationNode(ASTNode node)
+	{
+		this.declarationNode = node;
 	}
 
 	public SymbolTable getDefinedIn()

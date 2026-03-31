@@ -41,6 +41,8 @@ public final class MethodSymbol extends Symbol
 	 * than via an explicit {@code impl} declaration in Nebula source code.
 	 */
 	private boolean syntheticStructural = false;
+	/** True for enum variant constructors (static calls that should not prepend receiver). */
+	private boolean isStaticConstructor = false;
 
 	public MethodSymbol(String name, FunctionType type, List<Modifier> modifiers, boolean isExtern, ASTNode declarationNode, List<TypeParameterType> typeParameters)
 	{
@@ -70,6 +72,15 @@ public final class MethodSymbol extends Symbol
 		this.genericBitcode = bitcode;
 	}
 
+		public boolean isStaticConstructor()
+		{
+			return isStaticConstructor;
+		}
+
+		public void setStaticConstructor(boolean value)
+		{
+			this.isStaticConstructor = value;
+		}
 	public String getOverriddenMangledName()
 	{
 		return overriddenMangledName;

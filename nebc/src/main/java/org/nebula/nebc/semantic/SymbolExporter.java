@@ -255,6 +255,14 @@ public class SymbolExporter
         obj.addProperty("name", vs.getName());
         obj.addProperty("type", vs.getType().name());
         obj.addProperty("mutable", vs.isMutable());
+        if (!vs.isMutable() && vs.getConstValue() != null)
+        {
+            Object cv = vs.getConstValue();
+            if (cv instanceof Number n)
+                obj.addProperty("const_value", n);
+            else if (cv instanceof String s)
+                obj.addProperty("const_value", s);
+        }
         exportAttributes(vs.getAttributes(), obj);
         return obj;
     }

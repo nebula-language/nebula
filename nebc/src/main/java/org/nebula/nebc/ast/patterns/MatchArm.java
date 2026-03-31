@@ -8,18 +8,26 @@ import org.nebula.nebc.frontend.diagnostic.SourceSpan;
 public class MatchArm extends ASTNode
 {
 	public final Pattern pattern;
+	public final Expression guard; // nullable — the IF guard expression
 	public final Expression result;
 
-	public MatchArm(SourceSpan span, Pattern pattern, Expression result)
+	public MatchArm(SourceSpan span, Pattern pattern, Expression guard, Expression result)
 	{
 		super(span);
 		this.pattern = pattern;
+		this.guard = guard;
 		this.result = result;
+	}
+
+	/** Backwards-compatible constructor with no guard. */
+	public MatchArm(SourceSpan span, Pattern pattern, Expression result)
+	{
+		this(span, pattern, null, result);
 	}
 
 	@Override
 	public <R> R accept(ASTVisitor<R> visitor)
 	{
-		return visitor.visitMatchArm(this); // You'll need to add this to ASTVisitor
+		return visitor.visitMatchArm(this);
 	}
 }
